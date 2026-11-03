@@ -2,7 +2,7 @@ import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Exit, Layer, Option } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
-import { AppConfig } from "../src/AppConfig.ts";
+import { AppConfig, version } from "../src/AppConfig.ts";
 import { isStaleVersion, ServerLifecycle } from "../src/ServerLifecycle.ts";
 
 /**
@@ -38,6 +38,13 @@ describe("isStaleVersion", () => {
 
   it("an unparseable client version never evicts a running daemon", () => {
     expect(isStaleVersion("0.0.0", "garbage")).toBe(false);
+  });
+
+  it("this build's own version is comparable, and newer than the old hardcoded one", () => {
+    expect(version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(isStaleVersion(version, version)).toBe(false);
+    // 0.2.0 and earlier always reported 0.0.0, so those daemons must be replaced.
+    expect(isStaleVersion("0.0.0", version)).toBe(true);
   });
 });
 

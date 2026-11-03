@@ -3,6 +3,7 @@
 When a client finds a daemon already answering `GET /health`, it compares the reported version against its own and takes over **iff the running version is strictly older**: it SIGTERMs the daemon via the shared `<stateDir>/server.pid`, waits for the port to free (poll `/health` until connection-refused), then spawns its own and waits healthy.
 An equal-or-newer daemon is reused untouched - the older client "steps aside", so the only client that ever replaces a server is a strictly-newer one.
 Versions are compared as numeric `major.minor.patch` tuples (no `semver` dependency; an unparseable running version counts as stale).
+The version is read from `package.json` and inlined at build time, so it tracks every release; a hardcoded value would make every release look equal and the takeover would never fire.
 
 We evict via the pidfile + signal, **not** an HTTP shutdown route, because the stale server is by definition an *older* version that cannot be assumed to expose any new endpoint - whereas every version writes the same pidfile and shuts down gracefully on SIGTERM, so the signal is the one channel that works across the version gap the feature exists to bridge.
 The signal core is shared with `intervu stop` (`ServerLifecycle.signalStop`).

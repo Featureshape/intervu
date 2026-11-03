@@ -1,8 +1,15 @@
 import { Config, Duration, Effect, Layer, Option, Path, Schema } from "effect";
 import * as Context from "effect/Context";
+import { version as packageVersion } from "../package.json" with {
+  type: "json",
+};
 
-/** The version reported by `GET /health` and `intervu --version`. */
-export const version = "0.0.0";
+/**
+ * The version reported by `GET /health` and `intervu --version`, read from
+ * `package.json` and inlined at build time. It must track releases, because the
+ * stale-daemon takeover (ADR 0015) only fires when a client is strictly newer.
+ */
+export const version = packageVersion;
 
 /** Default loopback port; `INTERVU_PORT` overrides. */
 const defaultPort = 51789;
