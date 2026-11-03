@@ -1,5 +1,11 @@
 # intervu
 
+## 0.2.1
+
+### Patch Changes
+
+- db79f5b: Report the real version from `intervu --version` and the daemon's health check instead of `0.0.0`, so upgrading replaces a running older daemon automatically.
+
 ## 0.2.0
 
 ### Minor Changes
