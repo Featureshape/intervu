@@ -49,7 +49,7 @@ The transition of a Session to `ended` status, driven by the human from the chro
 _Avoid_: close, cancel, finish; **stop** (which shuts the whole daemon down, not one Session)
 
 **Agent-reply**:
-A message the agent posts into the human's conversation panel (via `poll --agent-reply "<msg>"`) to explain what it changed; the agent-to-human direction of the conversation.
+A message the agent posts into the human's conversation panel (via `poll --agent-reply "<msg>"`, or `reply <file> "<msg>"` which returns without waiting) to explain what it changed, acknowledge Feedback, or answer a question; the agent-to-human direction of the conversation.
 _Avoid_: response, answer
 
 **Conversation**:
@@ -61,7 +61,7 @@ A human-facing indicator of the agent's state in the review loop: `idle` (no age
 _Avoid_: status, online/offline, waiting
 
 **SSE stream**:
-The single server-to-browser push channel (#7): a `text/event-stream` response off `SessionHub` at `/s/:key/events`, carrying JSON frames for the three server-driven pushes - live-reload nudges, Conversation appends (the human's Feedback messages and the agent's Agent-replies), and Presence changes. Replays the Conversation log on connect via `Last-Event-ID`. A separate path from both the Bridge (iframe<->chrome) and the poll (server-to-agent).
+The single server-to-browser push channel (#7): a `text/event-stream` response off `SessionHub` at `/s/:key/events`, carrying JSON frames for the three server-driven pushes - live-reload nudges (carrying the artifact's version, re-sent on connect), Conversation appends (the human's Feedback messages and the agent's Agent-replies), and Presence changes. Replays the Conversation log on connect via `Last-Event-ID`. A separate path from both the Bridge (iframe<->chrome) and the poll (server-to-agent).
 _Avoid_: connection, socket, websocket; the **Bridge** (a different path); TOON (this wire is JSON, not TOON)
 
 ### Output and design

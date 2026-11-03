@@ -25,6 +25,7 @@ interface ChromeConfig {
   readonly path: string;
   readonly sourceUrl: string;
   readonly key: string;
+  readonly artifactVersion: string | null;
 }
 
 const readConfig = (): ChromeConfig | null => {
@@ -47,7 +48,11 @@ const readConfig = (): ChromeConfig | null => {
   if (path === null || sourceUrl === null || key === null) {
     return null;
   }
-  return { path, sourceUrl, key };
+  const artifactVersion =
+    "artifactVersion" in parsed && typeof parsed.artifactVersion === "string"
+      ? parsed.artifactVersion
+      : null;
+  return { path, sourceUrl, key, artifactVersion };
 };
 
 const flash = (button: HTMLButtonElement, label: string): void => {
@@ -580,23 +585,41 @@ const currentMode = (): AnnotateMode =>
  * Live-reload the artifact in place (ADR 0010). The opaque-origin iframe can't be
  * `location.reload()`-ed from the parent, so a reload reassigns its `src` with a
  * cache-bust query - which the daemon ignores for relative-asset resolution. On
- * every (re)load the chrome re-posts the current Annotate-mode down the Bridge, so
- * an edit never silently resets the mode the human left on. Returns the reload
- * trigger the SSE channel calls; pending rows survive (they live in the chrome),
- * the in-iframe markers do not.
+ * every (re)load the chrome re-posts the current Annotate-mode and the last scroll
+ * position down the Bridge, so an edit never silently resets the mode the human
+ * left on or moves them off what they were reading. Returns the reload
+ * trigger the SSE channel calls with the artifact's version: the daemon sends it
+ * on every connect as well as on every edit, so the trigger skips a version
+ * already shown and an edit missed during a dropped connection still lands (ADR
+ * 0020). Pending rows survive (they live in the chrome), the in-iframe markers do
+ * not.
  */
 const wireLiveReload = (
   iframe: HTMLIFrameElement,
   config: ChromeConfig,
-): (() => void) => {
+): ((version: string) => void) => {
   let bust = 0;
+  let shown = config.artifactVersion;
+  let scroll = { x: 0, y: 0 };
+  onMessageFromFrame(iframe, (message) => {
+    if (message.kind === "scroll-changed") {
+      scroll = { x: message.x, y: message.y };
+    }
+  });
   iframe.addEventListener("load", () => {
     const frame = iframe.contentWindow;
     if (frame !== null) {
       postToFrame(frame, { kind: "set-mode", mode: currentMode() });
+      if (scroll.x !== 0 || scroll.y !== 0) {
+        postToFrame(frame, { kind: "restore-scroll", ...scroll });
+      }
     }
   });
-  return () => {
+  return (version) => {
+    if (version === shown) {
+      return;
+    }
+    shown = version;
     bust += 1;
     iframe.src = `/s/${config.key}/a/?r=${bust}`;
   };
@@ -667,7 +690,7 @@ const createLiveChannel = (
   handlers: {
     readonly setPresence: (presence: Presence) => void;
     readonly appendConversation: (entry: ConversationEntry) => void;
-    readonly reload: () => void;
+    readonly reload: (version: string) => void;
     readonly ended: () => void;
   },
 ): void => {
@@ -693,8 +716,12 @@ const createLiveChannel = (
       isConversationEntry(data)
     ) {
       handlers.appendConversation(data);
-    } else if (data._tag === "ArtifactReloaded") {
-      handlers.reload();
+    } else if (
+      data._tag === "ArtifactReloaded" &&
+      "version" in data &&
+      typeof data.version === "string"
+    ) {
+      handlers.reload(data.version);
     } else if (data._tag === "SessionEnded") {
       handlers.ended();
       source.close();

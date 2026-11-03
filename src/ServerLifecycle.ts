@@ -23,7 +23,12 @@ import {
   StaleDaemon,
   StaleServerTakeover,
 } from "./Errors.ts";
-import { EndResponse, Health, PollResponse } from "./Protocol.ts";
+import {
+  EndResponse,
+  Health,
+  PollResponse,
+  ReplyResponse,
+} from "./Protocol.ts";
 import { Session } from "./Session.ts";
 
 type EnsureError =
@@ -92,6 +97,8 @@ type PollError =
   | HttpClientError.HttpClientError
   | Schema.SchemaError;
 
+type ReplyError = EndError;
+
 type EndError =
   | ReviewNotOpen
   | HttpClientError.HttpClientError
@@ -129,6 +136,10 @@ export class ServerLifecycle extends Context.Service<
       timeoutSeconds: Option.Option<number>,
       agentReply: Option.Option<string>,
     ) => Effect.Effect<PollResponse, PollError>;
+    readonly reply: (
+      path: string,
+      message: string,
+    ) => Effect.Effect<ReplyResponse, ReplyError>;
     readonly end: (path: string) => Effect.Effect<EndResponse, EndError>;
   }
 >()("@intervu/ServerLifecycle") {
@@ -140,9 +151,27 @@ export class ServerLifecycle extends Context.Service<
       const fs = yield* FileSystem.FileSystem;
       const baseUrl = `http://${config.hostname}:${config.port}`;
 
+      // `BunHttpServer` binds the port before the routes are mounted and answers
+      // `404` for about 250ms in between, so a `404` from a daemon that is still
+      // starting is retried, briefly, rather than treated as a failure.
+      const isStarting = (
+        error: HttpClientError.HttpClientError | Schema.SchemaError,
+      ) =>
+        HttpClientError.isHttpClientError(error) &&
+        error.reason._tag === "StatusCodeError" &&
+        error.reason.response.status === 404;
+
       const ping = client
         .execute(HttpClientRequest.get(`${baseUrl}/health`))
-        .pipe(Effect.flatMap(HttpClientResponse.schemaBodyJson(Health)));
+        .pipe(
+          Effect.flatMap(HttpClientResponse.filterStatusOk),
+          Effect.flatMap(HttpClientResponse.schemaBodyJson(Health)),
+          Effect.retry({
+            while: isStarting,
+            times: 20,
+            schedule: Schedule.spaced("100 millis"),
+          }),
+        );
 
       const isConnRefused = (
         error: HttpClientError.HttpClientError | Schema.SchemaError,
@@ -346,12 +375,29 @@ export class ServerLifecycle extends Context.Service<
           );
         });
 
+      // Post an Agent-reply without waiting (ADR 0020). Path-addressed and
+      // lookup-without-create, so a `404` is a structured `ReviewNotOpen`.
+      const reply = (path: string, message: string) =>
+        Effect.gen(function* () {
+          const request = HttpClientRequest.post(`${baseUrl}/reply`).pipe(
+            HttpClientRequest.bodyJsonUnsafe({ path, message }),
+          );
+          const response = yield* client.execute(request);
+          if (response.status === 404) {
+            return yield* new ReviewNotOpen({ path });
+          }
+          return yield* HttpClientResponse.schemaBodyJson(ReplyResponse)(
+            response,
+          );
+        });
+
       return {
         ensure,
         requireHealthy,
         signalStop,
         openSession,
         poll,
+        reply,
         end,
       };
     }),

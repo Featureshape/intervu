@@ -113,10 +113,34 @@ const main = (): void => {
   window.addEventListener("mouseup", onMouseUp, true);
   window.addEventListener("mouseover", onPointerMove, true);
 
+  // Report at most one scroll position per frame, so the chrome can restore it
+  // across a live-reload (ADR 0020).
+  let scrollReportPending = false;
+  window.addEventListener("scroll", () => {
+    if (scrollReportPending) {
+      return;
+    }
+    scrollReportPending = true;
+    requestAnimationFrame(() => {
+      scrollReportPending = false;
+      postToParent({
+        kind: "scroll-changed",
+        x: window.scrollX,
+        y: window.scrollY,
+      });
+    });
+  });
+
   applyMode("off");
   onMessageFromParent((message) => {
     if (message.kind === "set-mode") {
       applyMode(message.mode);
+    } else if (message.kind === "restore-scroll") {
+      window.scrollTo({
+        left: message.x,
+        top: message.y,
+        behavior: "instant",
+      });
     } else if (message.kind === "annotation-removed") {
       overlay.removeMarker(message.id);
     } else if (message.kind === "snapshot-request") {

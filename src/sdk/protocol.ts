@@ -86,13 +86,32 @@ export interface SnapshotResultMessage {
   readonly html: string;
 }
 
+/**
+ * Iframe -> chrome: the artifact's scroll position changed. The chrome keeps the
+ * latest so a live-reload can put the human back where they were (ADR 0020).
+ */
+export interface ScrollChangedMessage {
+  readonly kind: "scroll-changed";
+  readonly x: number;
+  readonly y: number;
+}
+
+/** Chrome -> iframe: restore the scroll position after a live-reload. */
+export interface RestoreScrollMessage {
+  readonly kind: "restore-scroll";
+  readonly x: number;
+  readonly y: number;
+}
+
 /** Every payload the Bridge can carry, in either direction. */
 export type BridgeMessage =
   | SetModeMessage
   | AnnotationAddedMessage
   | AnnotationRemovedMessage
   | SnapshotRequestMessage
-  | SnapshotResultMessage;
+  | SnapshotResultMessage
+  | ScrollChangedMessage
+  | RestoreScrollMessage;
 
 /** The namespaced envelope wrapping every Bridge message on the wire. */
 export interface BridgeEnvelope {

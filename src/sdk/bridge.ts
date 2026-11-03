@@ -62,6 +62,14 @@ const isBridgeMessage = (value: unknown): value is BridgeMessage => {
   if (value.kind === "snapshot-result") {
     return "html" in value && typeof value.html === "string";
   }
+  if (value.kind === "scroll-changed" || value.kind === "restore-scroll") {
+    return (
+      "x" in value &&
+      typeof value.x === "number" &&
+      "y" in value &&
+      typeof value.y === "number"
+    );
+  }
   return false;
 };
 

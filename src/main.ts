@@ -141,7 +141,7 @@ const poll = Command.make(
             })
           : Output.pollFeedback({
               feedback: response.feedback,
-              help: `feedback received - edit the artifact, then 'intervu poll ${file}' to listen again`,
+              help: `feedback received - edit the artifact or answer with 'intervu reply ${file} "<message>"', then 'intervu poll ${file}' to listen again`,
             });
       yield* emit(yield* Toon.encode(view));
     }),
@@ -154,6 +154,39 @@ const poll = Command.make(
  * final-feedback rider - that is the chrome's Send & end. Re-running
  * `intervu <file>` resurrects the path to a live review (ADR 0012).
  */
+/**
+ * `intervu reply <file> <message>`: post an Agent-reply into the human's
+ * conversation panel and return immediately (ADR 0020). Unlike `poll
+ * --agent-reply` it never waits, so the agent can acknowledge feedback before a
+ * long edit, or answer a question about the codebase, while a poll stays open.
+ */
+const reply = Command.make(
+  "reply",
+  { file: Argument.file("file"), message: Argument.string("message") },
+  ({ file, message }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const lifecycle = yield* ServerLifecycle;
+
+      const realPath = yield* fs
+        .realPath(file)
+        .pipe(Effect.mapError(() => new ArtifactNotFound({ path: file })));
+
+      yield* lifecycle.requireHealthy;
+      const response = yield* lifecycle.reply(realPath, message);
+
+      const view = Output.replied({
+        posted: response.posted,
+        help: response.posted
+          ? `reply posted - keep a poll open with 'intervu poll ${file}'`
+          : response.ended
+            ? `nothing posted, the review has ended - re-run 'intervu ${file}' to reopen`
+            : "nothing posted, the message was blank",
+      });
+      yield* emit(yield* Toon.encode(view));
+    }),
+);
+
 const end = Command.make("end", { file: Argument.file("file") }, ({ file }) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -213,6 +246,10 @@ const server = Command.make(
           BunHttpServer.layer({
             hostname: config.hostname,
             port: boundPort,
+            // Bun closes a connection after 10s without bytes by default, which
+            // would sever the SSE stream between its 20s pings (ADR 0020). The
+            // daemon is loopback-only, so a dead client still delivers FIN/RST.
+            idleTimeout: 0,
           }),
         ),
       );
@@ -319,7 +356,7 @@ const setup = Command.make(
 );
 
 const cli = root.pipe(
-  Command.withSubcommands([open, poll, end, server, stop, setup]),
+  Command.withSubcommands([open, poll, reply, end, server, stop, setup]),
 );
 
 /**
@@ -330,6 +367,7 @@ const cli = root.pipe(
 const knownSubcommands = new Set([
   "open",
   "poll",
+  "reply",
   "end",
   "server",
   "stop",

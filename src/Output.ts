@@ -185,6 +185,21 @@ export const ended = (params: { readonly help: string }): EndedView => ({
   help: params.help,
 });
 
+/** A view for `intervu reply <file> <message>`: whether the reply posted. */
+export interface RepliedView {
+  readonly posted: boolean;
+  readonly help: string;
+}
+
+/** Shape the `intervu reply` outcome into its view. */
+export const replied = (params: {
+  readonly posted: boolean;
+  readonly help: string;
+}): RepliedView => ({
+  posted: params.posted,
+  help: params.help,
+});
+
 /**
  * One artifact of `intervu setup`: what happened to it (`installed` or
  * `already-present`) and where it landed, in canonical key order. Used for both

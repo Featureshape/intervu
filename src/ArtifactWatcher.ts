@@ -2,8 +2,9 @@ import {
   Effect,
   Fiber,
   FileSystem,
+  Filter,
   Layer,
-  Path,
+  Option,
   type Scope,
   Stream,
   SynchronizedRef,
@@ -13,17 +14,19 @@ import type { SessionKey } from "./Session.ts";
 import { ArtifactReloaded, SessionHub } from "./SessionHub.ts";
 
 /**
- * The lazy, ref-counted file watcher behind live-reload (ADR 0010). A watcher
+ * The lazy, ref-counted watcher behind live-reload (ADR 0010, 0020). A watcher
  * for a key runs only while at least one SSE connection for that key is open:
  * `track` is acquired on the SSE stream's scope, starting the watcher on the
  * first connection and stopping it on the last. This ref-count is deliberately
  * separate from the Presence poll counter - a browser connection drives reload,
  * not the agent's listening/working state.
  *
- * The watcher watches the artifact's parent directory filtered to its basename
- * (robust to an editor's atomic-save rename-replace, which a direct file watch
- * would miss), debounces a burst of events ~100ms, and publishes
- * `ArtifactReloaded` through the hub like every other server-driven push. Sibling
+ * The watcher stats the one artifact path on a short tick and publishes
+ * `ArtifactReloaded` when its version changes. It deliberately avoids
+ * `FileSystem.watch`, which is always recursive: on an artifact inside a large
+ * repo that walks and watches the whole subtree, and a same-named file anywhere
+ * below it looks like an edit. A stat costs the same at any repo size, cannot
+ * exhaust inotify watches, and handles an atomic-save rename-replace. Sibling
  * assets do not trigger a reload this slice.
  */
 
@@ -32,7 +35,8 @@ interface Watcher {
   readonly fiber: Fiber.Fiber<void>;
 }
 
-const DEBOUNCE = "100 millis";
+const POLL_INTERVAL = "100 millis";
+const DEBOUNCE = "150 millis";
 
 export class ArtifactWatcher extends Context.Service<
   ArtifactWatcher,
@@ -42,13 +46,19 @@ export class ArtifactWatcher extends Context.Service<
       artifactPath: string,
     ) => Effect.Effect<void, never, Scope.Scope>;
     readonly watching: (key: SessionKey) => Effect.Effect<boolean>;
+    /**
+     * The artifact's current version (modified time plus size), or `None` while
+     * the file is missing, as it briefly can be during a rename-replace.
+     */
+    readonly version: (
+      artifactPath: string,
+    ) => Effect.Effect<Option.Option<string>>;
   }
 >()("@intervu/ArtifactWatcher") {
   static readonly layer = Layer.effect(
     ArtifactWatcher,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
       const hub = yield* SessionHub;
       // The daemon-lifetime scope the watcher fibers are forked into, so a fiber
       // outlives the connection that started it (other connections may keep the
@@ -58,18 +68,36 @@ export class ArtifactWatcher extends Context.Service<
         new Map<SessionKey, Watcher>(),
       );
 
-      const watcherFor = (key: SessionKey, artifactPath: string) => {
-        const dir = path.dirname(artifactPath);
-        const base = path.basename(artifactPath);
-        return fs.watch(dir).pipe(
-          Stream.filter((event) => path.basename(event.path) === base),
-          Stream.debounce(DEBOUNCE),
-          Stream.runForEach(() => hub.publish(key, new ArtifactReloaded())),
+      const version = (artifactPath: string) =>
+        fs.stat(artifactPath).pipe(
+          Effect.map((info) => {
+            const modified = Option.match(info.mtime, {
+              onNone: () => 0,
+              onSome: (mtime) => mtime.getTime(),
+            });
+            return Option.some(`${modified}-${info.size}`);
+          }),
           Effect.catch((error) =>
-            Effect.logError("artifact watch failed", error),
+            Effect.logDebug("artifact stat failed", error).pipe(
+              Effect.as(Option.none<string>()),
+            ),
           ),
         );
-      };
+
+      // The first version seen is the baseline, not an edit, hence `drop(1)`. An
+      // edit that lands before the baseline is covered by the version the SSE
+      // route sends on connect.
+      const watcherFor = (key: SessionKey, artifactPath: string) =>
+        Stream.tick(POLL_INTERVAL).pipe(
+          Stream.mapEffect(() => version(artifactPath)),
+          Stream.filterMap(Filter.fromPredicateOption((v) => v)),
+          Stream.changes,
+          Stream.drop(1),
+          Stream.debounce(DEBOUNCE),
+          Stream.runForEach((current) =>
+            hub.publish(key, new ArtifactReloaded({ version: current })),
+          ),
+        );
 
       const track = (key: SessionKey, artifactPath: string) =>
         SynchronizedRef.modifyEffect(watchers, (map) =>
@@ -111,7 +139,7 @@ export class ArtifactWatcher extends Context.Service<
       const watching = (key: SessionKey): Effect.Effect<boolean> =>
         SynchronizedRef.get(watchers).pipe(Effect.map((map) => map.has(key)));
 
-      return { track, watching };
+      return { track, watching, version };
     }),
   );
 }
