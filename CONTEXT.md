@@ -37,7 +37,7 @@ One human submission - a message together with its attached annotations and a DO
 _Avoid_: prompt (collides with the LLM sense), message, comment
 
 **DOM snapshot**:
-The serialized live DOM of the artifact (`document.documentElement.outerHTML`) captured inside the iframe at Send and carried up the Bridge as part of a Feedback - the rendered document the human annotated and the one the annotation selectors resolve against, which diverges from the artifact's on-disk source for any interactive artifact.
+The serialized live DOM of the artifact (`document.documentElement.outerHTML`) captured inside the iframe at Send, carried up the Bridge as part of a Feedback, and handed to the agent as a file path by the Poll - the rendered document the human annotated and the one the annotation selectors resolve against, which diverges from the artifact's on-disk source for any interactive artifact.
 _Avoid_: source, file contents (the on-disk bytes served at `/s/:key/source` are a separate thing)
 
 **Poll**:

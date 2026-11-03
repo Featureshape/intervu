@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { Option } from "effect";
 import * as Output from "../src/Output.ts";
 import { Feedback } from "../src/Protocol.ts";
 
@@ -91,18 +92,20 @@ describe("Output.pollFeedback", () => {
     });
 
     const view = Output.pollFeedback({
-      feedback: [feedback],
+      feedback: [
+        { feedback, snapshotPath: Option.some("/state/snapshots/a/b.html") },
+      ],
       help: "next step",
     });
 
     expect(Object.keys(view)).toEqual(["feedback", "help"]);
     const item = view.feedback[0];
     expect(item?.message).toBe("tighten these");
-    // domSnapshot is the last key of each feedback item.
+    // The snapshot's path is the last key, and the page itself is not included.
     expect(Object.keys(item ?? {})).toEqual([
       "message",
       "annotations",
-      "domSnapshot",
+      "domSnapshotPath",
     ]);
     expect(item?.annotations[0]).toEqual({
       n: 1,
@@ -123,14 +126,52 @@ describe("Output.pollFeedback", () => {
     expect(item?.annotations[0] && "selectedText" in item.annotations[0]).toBe(
       false,
     );
-    expect(item?.domSnapshot).toBe("<html><body>snap</body></html>");
+    expect(item).toMatchObject({
+      domSnapshotPath: "/state/snapshots/a/b.html",
+    });
+  });
+
+  it("delivers the snapshot inline when it could not be saved", () => {
+    const view = Output.pollFeedback({
+      feedback: [
+        {
+          feedback: new Feedback({
+            message: "keep this",
+            annotations: [],
+            domSnapshot: "<html>inline</html>",
+          }),
+          snapshotPath: Option.none(),
+        },
+      ],
+      help: "next",
+    });
+
+    expect(view.feedback[0]).toEqual({
+      message: "keep this",
+      annotations: [],
+      domSnapshot: "<html>inline</html>",
+    });
   });
 
   it("renders a drained collection in order", () => {
     const view = Output.pollFeedback({
       feedback: [
-        new Feedback({ message: "first", annotations: [], domSnapshot: "a" }),
-        new Feedback({ message: "second", annotations: [], domSnapshot: "b" }),
+        {
+          feedback: new Feedback({
+            message: "first",
+            annotations: [],
+            domSnapshot: "a",
+          }),
+          snapshotPath: Option.some("/a.html"),
+        },
+        {
+          feedback: new Feedback({
+            message: "second",
+            annotations: [],
+            domSnapshot: "b",
+          }),
+          snapshotPath: Option.some("/b.html"),
+        },
       ],
       help: "next",
     });
@@ -162,11 +203,14 @@ describe("Output.pollEnded", () => {
   it("carries the final feedback of a Send & end", () => {
     const view = Output.pollEnded({
       feedback: [
-        new Feedback({
-          message: "last word",
-          annotations: [],
-          domSnapshot: "x",
-        }),
+        {
+          feedback: new Feedback({
+            message: "last word",
+            annotations: [],
+            domSnapshot: "x",
+          }),
+          snapshotPath: Option.some("/x.html"),
+        },
       ],
       help: "stop",
     });

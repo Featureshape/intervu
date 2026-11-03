@@ -18,6 +18,7 @@ import { SessionPersistence } from "./SessionPersistence.ts";
 import { SessionStore } from "./SessionStore.ts";
 import { Setup } from "./Setup.ts";
 import { SkillAsset } from "./SkillAsset.ts";
+import { SnapshotFiles } from "./SnapshotFiles.ts";
 import * as Toon from "./Toon.ts";
 
 const bin = "intervu";
@@ -129,6 +130,12 @@ const poll = Command.make(
 
       yield* lifecycle.requireHealthy;
       const response = yield* lifecycle.poll(realPath, timeout, agentReply);
+      const snapshots = yield* SnapshotFiles;
+      const delivered = yield* Effect.forEach(response.feedback, (feedback) =>
+        snapshots
+          .save(realPath, feedback.domSnapshot)
+          .pipe(Effect.map((snapshotPath) => ({ feedback, snapshotPath }))),
+      );
 
       const view = response.timedOut
         ? Output.pollTimedOut({
@@ -136,11 +143,11 @@ const poll = Command.make(
           })
         : response.ended
           ? Output.pollEnded({
-              feedback: response.feedback,
+              feedback: delivered,
               help: `review ended - apply any final feedback above, then stop; re-run 'intervu ${file}' to reopen`,
             })
           : Output.pollFeedback({
-              feedback: response.feedback,
+              feedback: delivered,
               help: `feedback received - edit the artifact or answer with 'intervu reply ${file} "<message>"', then 'intervu poll ${file}' to listen again`,
             });
       yield* emit(yield* Toon.encode(view));
@@ -392,6 +399,7 @@ const AppLayer = Layer.mergeAll(
   ServerLifecycle.layer,
   ArtifactWatcher.layer,
   Setup.layer,
+  SnapshotFiles.layer,
 ).pipe(
   Layer.provideMerge(SessionHub.layer),
   Layer.provideMerge(SessionPersistence.fileLayer),

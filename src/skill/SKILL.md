@@ -86,9 +86,13 @@ Each Feedback carries three things:
 - **Annotations** - the markers the human attached to the page.
   Each has a CSS `selector`, the element `tag`, and the surrounding `text` (a `text` annotation also carries the exact `selectedText`).
 - **The message** - the human's words for this submission.
-- **The DOM snapshot** - the serialized live DOM the human actually annotated.
+- **The DOM snapshot** - the serialized live DOM the human actually annotated, saved to the file at `domSnapshotPath`.
   The annotation selectors resolve against this snapshot, not against your on-disk source.
-  For an interactive artifact the rendered DOM diverges from the file on disk, so read the snapshot to locate what each selector points at, then make the change in the source file.
+
+Start from the annotations and the message, which are often enough on their own.
+Open the snapshot only when you cannot locate a target from its selector and text, which is most likely for an interactive artifact, whose rendered DOM diverges from the file on disk.
+Search the snapshot file rather than reading all of it, because a whole page takes up a lot of context, then make the change in the source file.
+If the file could not be saved, the Feedback carries the page inline as `domSnapshot` instead.
 
 ## Poll discipline
 
