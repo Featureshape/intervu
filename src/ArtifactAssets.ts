@@ -140,6 +140,8 @@ export interface ChromeParams {
   readonly key: string;
   readonly filename: string;
   readonly path: string;
+  /** The artifact's version when this page rendered; `null` if it was missing. */
+  readonly artifactVersion: string | null;
 }
 
 /** The shared button utilities; the Annotate toggle adds its pressed-state
@@ -187,6 +189,7 @@ export const renderChrome = (params: ChromeParams): string => {
     path: params.path,
     sourceUrl,
     key: params.key,
+    artifactVersion: params.artifactVersion,
   });
   return `<!doctype html>
 <html lang="en" class="h-full">

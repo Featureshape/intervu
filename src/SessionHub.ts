@@ -40,10 +40,15 @@ export class ConversationAppended extends Schema.TaggedClass<ConversationAppende
   entry: ConversationEntry,
 }) {}
 
-/** The artifact file changed on disk: nudge the browser to reload the iframe. */
+/**
+ * The artifact file changed on disk: nudge the browser to reload the iframe. The
+ * `version` lets the chrome ignore a version it already shows (ADR 0020).
+ */
 export class ArtifactReloaded extends Schema.TaggedClass<ArtifactReloaded>(
   "ArtifactReloaded",
-)("ArtifactReloaded", {}) {}
+)("ArtifactReloaded", {
+  version: Schema.String,
+}) {}
 
 /** The agent's Presence changed; carries the freshly derived current state. */
 export class PresenceChanged extends Schema.TaggedClass<PresenceChanged>(

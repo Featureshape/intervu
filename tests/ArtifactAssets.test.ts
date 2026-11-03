@@ -104,6 +104,7 @@ describe("ArtifactAssets.renderChrome", () => {
     key: "abc123def4567890",
     filename: "report.html",
     path: "/proj/artifact/report.html",
+    artifactVersion: "123-45",
   });
 
   it("embeds the filename and points the iframe at the artifact route", () => {
@@ -184,6 +185,7 @@ describe("ArtifactAssets.renderChrome", () => {
       path: "/proj/artifact/report.html",
       sourceUrl: "/s/abc123def4567890/source",
       key: "abc123def4567890",
+      artifactVersion: "123-45",
     });
   });
 });

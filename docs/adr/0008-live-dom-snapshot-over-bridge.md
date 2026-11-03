@@ -2,7 +2,7 @@
 
 ## Status
 
-accepted
+accepted; delivery to the agent is amended by ADR 0021
 
 ## Context and decision
 

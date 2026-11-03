@@ -37,7 +37,7 @@ One human submission - a message together with its attached annotations and a DO
 _Avoid_: prompt (collides with the LLM sense), message, comment
 
 **DOM snapshot**:
-The serialized live DOM of the artifact (`document.documentElement.outerHTML`) captured inside the iframe at Send and carried up the Bridge as part of a Feedback - the rendered document the human annotated and the one the annotation selectors resolve against, which diverges from the artifact's on-disk source for any interactive artifact.
+The serialized live DOM of the artifact (`document.documentElement.outerHTML`) captured inside the iframe at Send, carried up the Bridge as part of a Feedback, and handed to the agent as a file path by the Poll - the rendered document the human annotated and the one the annotation selectors resolve against, which diverges from the artifact's on-disk source for any interactive artifact.
 _Avoid_: source, file contents (the on-disk bytes served at `/s/:key/source` are a separate thing)
 
 **Poll**:
@@ -49,7 +49,7 @@ The transition of a Session to `ended` status, driven by the human from the chro
 _Avoid_: close, cancel, finish; **stop** (which shuts the whole daemon down, not one Session)
 
 **Agent-reply**:
-A message the agent posts into the human's conversation panel (via `poll --agent-reply "<msg>"`) to explain what it changed; the agent-to-human direction of the conversation.
+A message the agent posts into the human's conversation panel (via `poll --agent-reply "<msg>"`, or `reply <file> "<msg>"` which returns without waiting) to explain what it changed, acknowledge Feedback, or answer a question; the agent-to-human direction of the conversation.
 _Avoid_: response, answer
 
 **Conversation**:
@@ -61,7 +61,7 @@ A human-facing indicator of the agent's state in the review loop: `idle` (no age
 _Avoid_: status, online/offline, waiting
 
 **SSE stream**:
-The single server-to-browser push channel (#7): a `text/event-stream` response off `SessionHub` at `/s/:key/events`, carrying JSON frames for the three server-driven pushes - live-reload nudges, Conversation appends (the human's Feedback messages and the agent's Agent-replies), and Presence changes. Replays the Conversation log on connect via `Last-Event-ID`. A separate path from both the Bridge (iframe<->chrome) and the poll (server-to-agent).
+The single server-to-browser push channel (#7): a `text/event-stream` response off `SessionHub` at `/s/:key/events`, carrying JSON frames for the three server-driven pushes - live-reload nudges (carrying the artifact's version, re-sent on connect), Conversation appends (the human's Feedback messages and the agent's Agent-replies), and Presence changes. Replays the Conversation log on connect via `Last-Event-ID`. A separate path from both the Bridge (iframe<->chrome) and the poll (server-to-agent).
 _Avoid_: connection, socket, websocket; the **Bridge** (a different path); TOON (this wire is JSON, not TOON)
 
 ### Output and design

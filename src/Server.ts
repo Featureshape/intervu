@@ -25,6 +25,8 @@ import {
   OpenSessionRequest,
   PollRequest,
   PollResponse,
+  ReplyRequest,
+  ReplyResponse,
   ValidFeedback,
 } from "./Protocol.ts";
 import { type Session, SessionKey } from "./Session.ts";
@@ -109,10 +111,13 @@ const chromeRoute = HttpRouter.add(
   withSession((session) =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
+      const watcher = yield* ArtifactWatcher;
+      const artifactVersion = yield* watcher.version(session.path);
       const html = ArtifactAssets.renderChrome({
         key: session.key,
         filename: path.basename(session.path),
         path: session.path,
+        artifactVersion: Option.getOrNull(artifactVersion),
       });
       return HttpServerResponse.text(html, { contentType: "text/html" });
     }),
@@ -244,6 +249,27 @@ const feedbackRoute = HttpRouter.add(
 );
 
 /**
+ * Append a non-blank Agent-reply to the Conversation and push it to the chrome
+ * over the SSE stream. A blank message is a no-op; returns whether one posted.
+ */
+const postAgentReply = (key: SessionKey, message: string) =>
+  Effect.gen(function* () {
+    const text = message.trim();
+    if (text.length === 0) {
+      return false;
+    }
+    const store = yield* SessionStore;
+    const hub = yield* SessionHub;
+    const entry = yield* store.appendConversation(key, {
+      role: "agent",
+      text,
+      annotationCount: 0,
+    });
+    yield* hub.publish(key, new ConversationAppended({ entry }));
+    return true;
+  });
+
+/**
  * The agent's long-poll (ADR 0009): path-addressed and lookup-without-create, so
  * an unopened path is a structured `404` (`ReviewNotOpen`) rather than a silent
  * spawn. For an open Session it holds the request, draining queued Feedback once
@@ -265,7 +291,6 @@ const pollRoute = HttpRouter.add(
   "/poll",
   Effect.gen(function* () {
     const store = yield* SessionStore;
-    const hub = yield* SessionHub;
     const request = yield* HttpServerRequest.schemaBodyJson(PollRequest);
     const session = yield* store.getByPath(request.path);
     return yield* Option.match(session, {
@@ -279,15 +304,7 @@ const pollRoute = HttpRouter.add(
       onSome: (open) =>
         Effect.scoped(
           Effect.gen(function* () {
-            const reply = request.agentReply?.trim() ?? "";
-            if (reply.length > 0) {
-              const entry = yield* store.appendConversation(open.key, {
-                role: "agent",
-                text: reply,
-                annotationCount: 0,
-              });
-              yield* hub.publish(open.key, new ConversationAppended({ entry }));
-            }
+            yield* postAgentReply(open.key, request.agentReply ?? "");
             const outcome = yield* FeedbackWait.wait(open.key, {
               timeout: Option.map(
                 Option.fromNullishOr(request.timeoutSeconds),
@@ -307,6 +324,47 @@ const pollRoute = HttpRouter.add(
   }).pipe(
     Effect.catch((error) =>
       Effect.logError("POST /poll failed", error).pipe(
+        Effect.as(HttpServerResponse.empty({ status: 500 })),
+      ),
+    ),
+  ),
+);
+
+/**
+ * Post an Agent-reply without waiting (ADR 0020), so the agent can acknowledge
+ * feedback or answer a question while another poll stays open, or without editing
+ * the artifact at all. Path-addressed and lookup-without-create like `POST /end`.
+ * An ended Session posts nothing, since its chrome no longer listens, and says so.
+ */
+const replyRoute = HttpRouter.add(
+  "POST",
+  "/reply",
+  Effect.gen(function* () {
+    const store = yield* SessionStore;
+    const request = yield* HttpServerRequest.schemaBodyJson(ReplyRequest);
+    const session = yield* store.getByPath(request.path);
+    return yield* Option.match(session, {
+      onNone: () =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            { _tag: "ReviewNotOpen", path: request.path },
+            { status: 404 },
+          ),
+        ),
+      onSome: (open) =>
+        Effect.gen(function* () {
+          const ended = open.status === "ended";
+          const posted = ended
+            ? false
+            : yield* postAgentReply(open.key, request.message);
+          return yield* HttpServerResponse.schemaJson(ReplyResponse)(
+            new ReplyResponse({ posted, ended }),
+          );
+        }),
+    });
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.logError("POST /reply failed", error).pipe(
         Effect.as(HttpServerResponse.empty({ status: 500 })),
       ),
     ),
@@ -446,6 +504,9 @@ const eventsRoute = HttpRouter.add(
           const subscription = yield* hub.subscribe(session.key);
           yield* watcher.track(session.key, session.path);
 
+          // Read after `track`, so an edit is either in this version or arrives
+          // live. The chrome ignores a version it already shows (ADR 0020).
+          const version = yield* watcher.version(session.path);
           const replay = yield* store.conversationSince(session.key, afterSeq);
           const presence = yield* hub.presence(session.key);
           // Subscribe-then-check (mirror of the poll): read the status after
@@ -459,6 +520,10 @@ const eventsRoute = HttpRouter.add(
           const initial = Stream.fromIterable([
             ...replay.map(Sse.conversationFrame),
             Sse.presenceFrame(presence),
+            ...Option.match(version, {
+              onNone: () => [],
+              onSome: (current) => [Sse.reloadFrame(current)],
+            }),
             ...(ended ? [Sse.endedFrame()] : []),
           ]);
           const live = Stream.fromSubscription(subscription).pipe(
@@ -535,6 +600,7 @@ export const layer = HttpRouter.serve(
     sourceRoute,
     feedbackRoute,
     pollRoute,
+    replyRoute,
     endChromeRoute,
     endRoute,
     eventsRoute,

@@ -60,6 +60,13 @@ intervu poll report.html
 intervu poll report.html --agent-reply "tightened both headings"
 ```
 
+Post into the conversation panel without waiting, for example to acknowledge
+feedback or answer a question while a poll stays open:
+
+```bash
+intervu reply report.html "looking at the billing code now"
+```
+
 ## Feedback loop
 
 ```bash

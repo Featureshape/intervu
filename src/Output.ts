@@ -1,3 +1,4 @@
+import { Option } from "effect";
 import type { Annotation, Feedback } from "./Protocol.ts";
 
 /**
@@ -85,13 +86,26 @@ export interface PollAnnotationView {
 }
 
 /**
- * One drained Feedback: the human's message, its numbered annotations, and the
- * DOM snapshot last (it is the bulky field, kept out of the way).
+ * One drained Feedback: the human's message, its numbered annotations, and where
+ * to find the DOM snapshot (ADR 0021). Normally that is a file path; the snapshot
+ * itself appears inline only if the file could not be written.
  */
-export interface PollFeedbackView {
-  readonly message: string;
-  readonly annotations: readonly PollAnnotationView[];
-  readonly domSnapshot: string;
+export type PollFeedbackView =
+  | {
+      readonly message: string;
+      readonly annotations: readonly PollAnnotationView[];
+      readonly domSnapshotPath: string;
+    }
+  | {
+      readonly message: string;
+      readonly annotations: readonly PollAnnotationView[];
+      readonly domSnapshot: string;
+    };
+
+/** A drained Feedback and the file its snapshot was saved to, if it was saved. */
+export interface DeliveredFeedback {
+  readonly feedback: Feedback;
+  readonly snapshotPath: Option.Option<string>;
 }
 
 /** The poll's feedback document: the drained collection plus a next-step line. */
@@ -133,18 +147,32 @@ const shapeAnnotation = (
     : base;
 };
 
-const shapeFeedback = (feedback: Feedback): PollFeedbackView => ({
-  message: feedback.message,
-  annotations: feedback.annotations.map(shapeAnnotation),
-  domSnapshot: feedback.domSnapshot,
-});
+const shapeFeedback = ({
+  feedback,
+  snapshotPath,
+}: DeliveredFeedback): PollFeedbackView => {
+  const base = {
+    message: feedback.message,
+    annotations: feedback.annotations.map(shapeAnnotation),
+  };
+  return Option.match(snapshotPath, {
+    onNone: (): PollFeedbackView => ({
+      ...base,
+      domSnapshot: feedback.domSnapshot,
+    }),
+    onSome: (domSnapshotPath): PollFeedbackView => ({
+      ...base,
+      domSnapshotPath,
+    }),
+  });
+};
 
 /**
  * Shape the poll's drained feedback into its view, pinning the canonical order
  * (`feedback`, then `help`) so the TOON render is stable.
  */
 export const pollFeedback = (params: {
-  readonly feedback: readonly Feedback[];
+  readonly feedback: readonly DeliveredFeedback[];
   readonly help: string;
 }): PollView => ({
   feedback: params.feedback.map(shapeFeedback),
@@ -165,7 +193,7 @@ export const pollTimedOut = (params: {
  * applies any final feedback, sees `ended`, and stops.
  */
 export const pollEnded = (params: {
-  readonly feedback: readonly Feedback[];
+  readonly feedback: readonly DeliveredFeedback[];
   readonly help: string;
 }): PollEndedView => ({
   ended: true,
@@ -182,6 +210,21 @@ export interface EndedView {
 /** Shape the `intervu end` confirmation into its view. */
 export const ended = (params: { readonly help: string }): EndedView => ({
   ended: true,
+  help: params.help,
+});
+
+/** A view for `intervu reply <file> <message>`: whether the reply posted. */
+export interface RepliedView {
+  readonly posted: boolean;
+  readonly help: string;
+}
+
+/** Shape the `intervu reply` outcome into its view. */
+export const replied = (params: {
+  readonly posted: boolean;
+  readonly help: string;
+}): RepliedView => ({
+  posted: params.posted,
   help: params.help,
 });
 

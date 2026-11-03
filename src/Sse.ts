@@ -13,8 +13,8 @@ import type { HubEvent } from "./SessionHub.ts";
  *
  * Only `ConversationAppended` carries an `id:` (its monotonic `seq`), so a
  * transparent `EventSource` reconnect resumes the thread from `Last-Event-ID`.
- * Presence is current-state and a reload is momentary; neither is replayable, so
- * neither carries an `id`.
+ * Presence and the artifact version are current-state: both are re-sent fresh on
+ * every connect, so neither carries an `id`.
  */
 
 /** A `: ping` comment every ~20s keeps the connection warm (ADR 0010 insurance). */
@@ -40,9 +40,14 @@ export const conversationFrame = (entry: ConversationEntry): string =>
 export const presenceFrame = (presence: Presence): string =>
   frame(JSON.stringify({ _tag: "PresenceChanged", presence }));
 
-/** The momentary reload nudge; the browser owns its own cache-bust counter. */
-export const reloadFrame = (): string =>
-  frame(JSON.stringify({ _tag: "ArtifactReloaded" }));
+/**
+ * The artifact's current version, sent on every connect and on every edit (ADR
+ * 0020). The chrome reloads only when it differs from what it shows, so an edit
+ * made during a dropped connection is picked up on reconnect. The browser owns
+ * its own cache-bust counter.
+ */
+export const reloadFrame = (version: string): string =>
+  frame(JSON.stringify({ _tag: "ArtifactReloaded", version }));
 
 /**
  * The Session ended (ADR 0011 / 0012): the chrome swaps in the "Ended" pill,
@@ -66,7 +71,7 @@ export const liveFrame = (event: HubEvent): Option.Option<string> => {
     case "PresenceChanged":
       return Option.some(presenceFrame(event.presence));
     case "ArtifactReloaded":
-      return Option.some(reloadFrame());
+      return Option.some(reloadFrame(event.version));
     case "SessionEnded":
       return Option.some(endedFrame());
   }

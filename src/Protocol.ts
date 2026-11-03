@@ -161,3 +161,24 @@ export class EndRiderRequest extends Schema.Class<EndRiderRequest>(
 export class EndResponse extends Schema.Class<EndResponse>("EndResponse")({
   ended: Schema.Boolean,
 }) {}
+
+/**
+ * `POST /reply` request body: the artifact's resolved realpath, looked up without
+ * creating, and the Agent-reply to post straight away (ADR 0020).
+ */
+export class ReplyRequest extends Schema.Class<ReplyRequest>("ReplyRequest")({
+  path: Schema.String,
+  message: Schema.String,
+}) {}
+
+/**
+ * `POST /reply` response body: whether the message reached the Conversation, and
+ * whether it did not because the Session has ended (the other reason is a blank
+ * message).
+ */
+export class ReplyResponse extends Schema.Class<ReplyResponse>("ReplyResponse")(
+  {
+    posted: Schema.Boolean,
+    ended: Schema.Boolean,
+  },
+) {}

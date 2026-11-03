@@ -2,7 +2,7 @@
 
 ## Status
 
-accepted
+accepted; the reload nudge, the file watcher, and the heartbeat are amended by ADR 0020
 
 ## Context and decision
 

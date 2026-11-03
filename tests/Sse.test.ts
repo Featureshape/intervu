@@ -47,12 +47,12 @@ describe("Sse", () => {
     expect(frame).toContain("line one\\nline two");
   });
 
-  it("frames presence, reload, and ended without an id (not replayable)", () => {
+  it("frames presence, version, and ended without an id (current-state)", () => {
     expect(Sse.presenceFrame("working")).toBe(
       `data: ${JSON.stringify({ _tag: "PresenceChanged", presence: "working" })}\n\n`,
     );
-    expect(Sse.reloadFrame()).toBe(
-      `data: ${JSON.stringify({ _tag: "ArtifactReloaded" })}\n\n`,
+    expect(Sse.reloadFrame("123-45")).toBe(
+      `data: ${JSON.stringify({ _tag: "ArtifactReloaded", version: "123-45" })}\n\n`,
     );
     expect(Sse.endedFrame()).toBe(
       `data: ${JSON.stringify({ _tag: "SessionEnded" })}\n\n`,
@@ -68,9 +68,9 @@ describe("Sse", () => {
     expect(
       Sse.liveFrame(new PresenceChanged({ presence: "listening" })),
     ).toStrictEqual(Option.some(Sse.presenceFrame("listening")));
-    expect(Sse.liveFrame(new ArtifactReloaded())).toStrictEqual(
-      Option.some(Sse.reloadFrame()),
-    );
+    expect(
+      Sse.liveFrame(new ArtifactReloaded({ version: "123-45" })),
+    ).toStrictEqual(Option.some(Sse.reloadFrame("123-45")));
     // Unlike FeedbackQueued, SessionEnded does reach the browser (ADR 0011).
     expect(Sse.liveFrame(new SessionEnded())).toStrictEqual(
       Option.some(Sse.endedFrame()),

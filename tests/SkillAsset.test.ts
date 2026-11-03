@@ -20,6 +20,8 @@ describe("SkillAsset.bakedLayer", () => {
       expect(asset.markdown).toContain("open");
       expect(asset.markdown).toContain("poll");
       expect(asset.markdown).toContain("--agent-reply");
+      expect(asset.markdown).toContain("intervu reply");
+      expect(asset.markdown).toContain("domSnapshotPath");
       expect(asset.markdown).toContain("end");
     }).pipe(Effect.provide(SkillAsset.bakedLayer)),
   );
