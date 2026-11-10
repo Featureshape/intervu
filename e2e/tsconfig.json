@@ -11,6 +11,10 @@
     "types": ["bun"],
     "plugins": []
   },
-  "exclude": [],
+  // The previous Vite major's fixture config passes plugins typed against the
+  // current Vite (the plugin is loaded from source) to the previous Vite's
+  // `defineConfig`, so it cannot typecheck here. A user's copy types `Plugin`
+  // from their own Vite through `dist/vite.d.ts`; the E2E run proves it works.
+  "exclude": ["fixtures/app-previous-vite"],
   "include": ["**/*.ts", "**/*.tsx"]
 }

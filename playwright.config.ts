@@ -8,6 +8,10 @@ import {
   fixtureAppUrl,
   noDaemonAppPort,
   noDaemonAppUrl,
+  previousViteAppDir,
+  previousViteAppPort,
+  previousViteAppUrl,
+  previousViteBin,
   unusedDaemonPort,
   viteBin,
 } from "./e2e/support.ts";
@@ -21,17 +25,33 @@ import {
  *
  * URL mode is proven against the fixture Vite + React app (`e2e/fixtures/app`),
  * served on Node with the `intervu/vite` plugin loaded from source: once wired to
- * the harness daemon, and once to a port no daemon listens on.
+ * the harness daemon, and once to a port no daemon listens on. The previous Vite
+ * major serves the same app from its own workspace (`e2e/fixtures/app-previous-vite`).
  */
 
 const PORT = 51990;
 const baseURL = `http://127.0.0.1:${PORT}`;
 const stateDir = path.join(os.tmpdir(), "intervu-e2e-state");
 
-/** Serve the fixture app on `port` with its plugin pointed at `daemonPort`. */
-const fixtureApp = (port: number, url: string, daemonPort: number) => ({
-  command: `node "${viteBin}" --port ${port} --strictPort`,
-  cwd: fixtureAppDir,
+/**
+ * Serve the fixture app with the Vite CLI `bin` from the config in `dir`, on
+ * `port`, with its plugin pointed at `daemonPort`.
+ */
+const fixtureApp = ({
+  bin,
+  dir,
+  port,
+  url,
+  daemonPort,
+}: {
+  readonly bin: string;
+  readonly dir: string;
+  readonly port: number;
+  readonly url: string;
+  readonly daemonPort: number;
+}) => ({
+  command: `node "${bin}" --port ${port} --strictPort`,
+  cwd: dir,
   url,
   reuseExistingServer: !process.env.CI,
   timeout: 120_000,
@@ -61,7 +81,26 @@ export default defineConfig({
         INTERVU_STATE_DIR: stateDir,
       },
     },
-    fixtureApp(fixtureAppPort, fixtureAppUrl, PORT),
-    fixtureApp(noDaemonAppPort, noDaemonAppUrl, unusedDaemonPort),
+    fixtureApp({
+      bin: viteBin,
+      dir: fixtureAppDir,
+      port: fixtureAppPort,
+      url: fixtureAppUrl,
+      daemonPort: PORT,
+    }),
+    fixtureApp({
+      bin: viteBin,
+      dir: fixtureAppDir,
+      port: noDaemonAppPort,
+      url: noDaemonAppUrl,
+      daemonPort: unusedDaemonPort,
+    }),
+    fixtureApp({
+      bin: previousViteBin,
+      dir: previousViteAppDir,
+      port: previousViteAppPort,
+      url: previousViteAppUrl,
+      daemonPort: unusedDaemonPort,
+    }),
   ],
 });

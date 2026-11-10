@@ -27,6 +27,10 @@ export const noDaemonAppPort = 51992;
 export const noDaemonAppUrl = `http://localhost:${noDaemonAppPort}`;
 export const unusedDaemonPort = 51993;
 
+/** The same fixture app on the previous Vite major, its daemon port unused. */
+export const previousViteAppPort = 51994;
+export const previousViteAppUrl = `http://localhost:${previousViteAppPort}`;
+
 /** The fixture app's directory, the root Vite serves and builds. */
 export const fixtureAppDir = nodePath.join(
   import.meta.dirname,
@@ -34,14 +38,25 @@ export const fixtureAppDir = nodePath.join(
   "app",
 );
 
-/** The Vite CLI, run on Node the way a user's dev server runs. */
-export const viteBin = nodePath.join(
+/** The workspace that serves the fixture app on the previous Vite major. */
+export const previousViteAppDir = nodePath.join(
   import.meta.dirname,
-  "..",
-  "node_modules",
-  "vite",
-  "bin",
-  "vite.js",
+  "fixtures",
+  "app-previous-vite",
+);
+
+/** The Vite CLI installed under `nodeModules`, run on Node like a user's. */
+const viteBinIn = (nodeModules: string): string =>
+  nodePath.join(nodeModules, "vite", "bin", "vite.js");
+
+/** The current Vite major's CLI. */
+export const viteBin = viteBinIn(
+  nodePath.join(import.meta.dirname, "..", "node_modules"),
+);
+
+/** The previous Vite major's CLI, installed in its fixture workspace. */
+export const previousViteBin = viteBinIn(
+  nodePath.join(previousViteAppDir, "node_modules"),
 );
 
 /** The absolute path of the committed fixture, the artifact under review. */
