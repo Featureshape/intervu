@@ -89,7 +89,7 @@ export const fixtureAppDir = nodePath.join(
   "app",
 );
 
-/** The workspace that serves the fixture app on the previous Vite major. */
+/** The package that serves the fixture app on the previous Vite major. */
 export const previousViteAppDir = nodePath.join(
   import.meta.dirname,
   "fixtures",
@@ -105,7 +105,7 @@ export const viteBin = viteBinIn(
   nodePath.join(import.meta.dirname, "..", "node_modules"),
 );
 
-/** The previous Vite major's CLI, installed in its fixture workspace. */
+/** The previous Vite major's CLI, installed from its fixture's own lockfile. */
 export const previousViteBin = viteBinIn(
   nodePath.join(previousViteAppDir, "node_modules"),
 );
