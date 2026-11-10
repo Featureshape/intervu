@@ -31,6 +31,13 @@ export const noDaemonAppPort = 51992;
 export const noDaemonAppUrl = `http://localhost:${noDaemonAppPort}`;
 export const unusedDaemonPort = 51993;
 
+/** The same fixture app served without the `intervu/vite` plugin. */
+export const noPluginAppPort = 51995;
+export const noPluginAppUrl = `http://localhost:${noPluginAppPort}`;
+
+/** A port no app listens on, for `intervu <url>` to find nothing at. */
+export const unreachableAppUrl = "http://localhost:51996";
+
 /** The same fixture app on the previous Vite major, its daemon port unused. */
 export const previousViteAppPort = 51994;
 export const previousViteAppUrl = `http://localhost:${previousViteAppPort}`;

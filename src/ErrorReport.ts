@@ -1,6 +1,7 @@
 import { Option } from "effect";
 import { CliError } from "effect/unstable/cli";
 import {
+  AppUnreachable,
   ArtifactNotFound,
   BrowserAssetBuildError,
   ConflictingSetupScope,
@@ -52,6 +53,16 @@ export const report = (
         tag: error._tag,
         message: `artifact not found: ${error.path}`,
         help: "check the path - run 'intervu <file>' with an existing artifact",
+      }),
+    );
+  }
+
+  if (error instanceof AppUnreachable) {
+    return Option.some(
+      Output.error({
+        tag: error._tag,
+        message: `nothing answered at ${error.url}`,
+        help: `start the app's dev server, then re-run 'intervu ${error.url}'`,
       }),
     );
   }

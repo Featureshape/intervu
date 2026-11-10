@@ -8,6 +8,8 @@ import {
   fixtureAppUrl,
   noDaemonAppPort,
   noDaemonAppUrl,
+  noPluginAppPort,
+  noPluginAppUrl,
   previousViteAppDir,
   previousViteAppPort,
   previousViteAppUrl,
@@ -25,30 +27,34 @@ import {
  *
  * URL mode is proven against the fixture Vite + React app (`e2e/fixtures/app`),
  * served on Node with the `intervu/vite` plugin loaded from source: once wired to
- * the harness daemon, and once to a port no daemon listens on. The previous Vite
- * major serves the same app from its own workspace (`e2e/fixtures/app-previous-vite`).
+ * the harness daemon, once to a port no daemon listens on, and once without the
+ * plugin at all. The previous Vite major serves the same app from its own
+ * workspace (`e2e/fixtures/app-previous-vite`).
  */
 
 const baseURL = `http://127.0.0.1:${daemonPort}`;
 
 /**
- * Serve the fixture app with the Vite CLI `bin` from the config in `dir`, on
- * `port`, with its plugin pointed at `daemonPort`.
+ * Serve the fixture app with the Vite CLI `bin` from the config in `dir` (or
+ * the file `config` there), on `port`, with `INTERVU_PORT` set to `daemonPort`
+ * for its plugin, if the config loads one.
  */
 const fixtureApp = ({
   bin,
   dir,
+  config,
   port,
   url,
   daemonPort,
 }: {
   readonly bin: string;
   readonly dir: string;
+  readonly config?: string;
   readonly port: number;
   readonly url: string;
   readonly daemonPort: number;
 }) => ({
-  command: `node "${bin}" --port ${port} --strictPort`,
+  command: `node "${bin}"${config === undefined ? "" : ` --config ${config}`} --port ${port} --strictPort`,
   cwd: dir,
   url,
   reuseExistingServer: !process.env.CI,
@@ -92,6 +98,14 @@ export default defineConfig({
       port: noDaemonAppPort,
       url: noDaemonAppUrl,
       daemonPort: unusedDaemonPort,
+    }),
+    fixtureApp({
+      bin: viteBin,
+      dir: fixtureAppDir,
+      config: "vite.no-plugin.config.ts",
+      port: noPluginAppPort,
+      url: noPluginAppUrl,
+      daemonPort,
     }),
     fixtureApp({
       bin: previousViteBin,

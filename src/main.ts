@@ -11,6 +11,7 @@ import {
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 import { AppConfig, version } from "./AppConfig.ts";
+import * as AppProbe from "./AppProbe.ts";
 import * as AppUrl from "./AppUrl.ts";
 import { ArtifactWatcher } from "./ArtifactWatcher.ts";
 import * as Browser from "./Browser.ts";
@@ -118,10 +119,13 @@ const openArtifact = Effect.fn("openArtifact")(function* (file: string) {
 });
 
 /**
- * `intervu open <url>` (and the bare-URL alias): URL mode (ADR 0022). Ensure the
+ * `intervu open <url>` (and the bare-URL alias): URL mode (ADR 0022). Fail fast
+ * with `AppUnreachable` when nothing answers at the URL; otherwise ensure the
  * daemon is up and open or resume the Session for the URL's origin, so every
- * route of one dev server lands in the same Session. The human already has the
- * app open, so no tab opens unless `--open` asks for one, at the URL as given.
+ * route of one dev server lands in the same Session. A missing `intervu/vite`
+ * plugin does not block the Session; the help line says how to add it. The
+ * human already has the app open, so no tab opens unless `--open` asks for one,
+ * at the URL as given.
  */
 const openApp = Effect.fn("openApp")(function* (
   app: AppUrl.AppUrl,
@@ -130,18 +134,24 @@ const openApp = Effect.fn("openApp")(function* (
   const config = yield* AppConfig;
   const lifecycle = yield* ServerLifecycle;
 
+  yield* AppProbe.requireAnswer(app);
   yield* lifecycle.ensure;
   const session = yield* lifecycle.openSession(app.origin, "app");
+  // Asked once the daemon is up: the plugin's relay forwards to it.
+  const pluginAnswers = yield* AppProbe.pluginAnswers(app.origin);
 
   if (openTab) {
     yield* Browser.openTab(app.url, config.browser);
   }
 
+  const next = `run 'intervu poll ${session.path}' to receive feedback`;
   const view = Output.appSession({
     key: session.key,
     origin: session.path,
     status: session.status,
-    help: `review open - run 'intervu poll ${session.path}' to receive feedback`,
+    help: pluginAnswers
+      ? `review open - ${next}`
+      : `review open, but the intervu Vite plugin is missing at ${session.path} - add \`import { intervu } from "intervu/vite"\` and \`intervu()\` to the plugins in vite.config.ts and restart the dev server, then ${next}`,
   });
   yield* emit(yield* Toon.encode(view));
 });
@@ -157,9 +167,11 @@ const open = Command.make(
     ),
   },
   ({ target, open }) =>
-    Result.match(target, {
-      onSuccess: (app) => openApp(app, open),
-      onFailure: openArtifact,
+    Effect.gen(function* () {
+      if (Result.isSuccess(target)) {
+        return yield* openApp(target.success, open);
+      }
+      return yield* openArtifact(target.failure);
     }),
 );
 
