@@ -1,5 +1,5 @@
 import { FixtureWidget } from "fixture-widget";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
 /**
@@ -20,13 +20,40 @@ const ZIndexWall = () =>
     document.body,
   );
 
-/** A small app with a stateful handler, the surface URL-mode specs drive. */
+/**
+ * A small app with a stateful handler and a second, client-side route, the
+ * surface URL-mode specs drive.
+ */
 export const App = () => {
   const [count, setCount] = useState(0);
   const [wall, setWall] = useState(false);
+  const [path, setPath] = useState(window.location.pathname);
+  useEffect(() => {
+    const follow = () => setPath(window.location.pathname);
+    window.addEventListener("popstate", follow);
+    return () => window.removeEventListener("popstate", follow);
+  }, []);
   return (
     <main>
       <h1 id="headline">Fixture app</h1>
+      <nav>
+        <a
+          id="nav-about"
+          href="/about"
+          onClick={(event) => {
+            event.preventDefault();
+            window.history.pushState(null, "", "/about");
+            setPath("/about");
+          }}
+        >
+          About
+        </a>
+      </nav>
+      {path === "/about" && (
+        <article>
+          <p>About the fixture app.</p>
+        </article>
+      )}
       <button
         id="counter"
         type="button"

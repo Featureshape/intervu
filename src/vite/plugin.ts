@@ -13,7 +13,12 @@ import {
   relayToOwnSession,
   sendError,
 } from "./relay.ts";
-import { overlayPath, relayPrefix, sessionPath } from "./relayPaths.ts";
+import {
+  overlayPath,
+  ownMarkupAttribute,
+  relayPrefix,
+  sessionPath,
+} from "./relayPaths.ts";
 
 /**
  * `intervu/vite`: the Vite plugin that puts intervu into a running app for URL
@@ -111,7 +116,11 @@ const overlayPlugin = (): Plugin => ({
     return [
       {
         tag: "script",
-        attrs: { type: "module", src: `${relayPrefix}${overlayPath}` },
+        attrs: {
+          type: "module",
+          src: `${relayPrefix}${overlayPath}`,
+          [ownMarkupAttribute]: "",
+        },
         injectTo: "body",
       },
     ];

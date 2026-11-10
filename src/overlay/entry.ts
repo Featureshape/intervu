@@ -2,7 +2,11 @@ import { createAnnotator } from "../sdk/annotator.ts";
 import { annotationToWire } from "../sdk/feedbackWire.ts";
 import type { Annotation } from "../sdk/protocol.ts";
 import { sourceAttribute } from "../vite/jsxSource.ts";
-import { relayPrefix, sessionPath } from "../vite/relayPaths.ts";
+import {
+  ownMarkupAttribute,
+  relayPrefix,
+  sessionPath,
+} from "../vite/relayPaths.ts";
 import { openSessionKeyIn } from "../vite/sessionAnswer.ts";
 
 /**
@@ -25,7 +29,7 @@ import { openSessionKeyIn } from "../vite/sessionAnswer.ts";
  * also records the page it was made on and the JSX `file:line:col` of the
  * nearest element the app's own code rendered, read from the plugin's
  * `data-intervu-src` stamp. Send posts the message, the pending annotations and
- * a DOM snapshot to the Session through the relay.
+ * a DOM snapshot without intervu's own markup to the Session through the relay.
  */
 
 const STYLES = `
@@ -493,6 +497,19 @@ const toWire = ({ annotation, source, pageUrl }: AppAnnotation) => ({
   pageUrl,
 });
 
+/**
+ * The app's DOM as the human sees it, without intervu: the overlay's host, the
+ * annotation markers' host and the plugin's overlay script are dropped from a
+ * copy, so the snapshot the agent reads is the app's own markup.
+ */
+const appSnapshot = (): string => {
+  const copy = document.importNode(document.documentElement, true);
+  for (const own of copy.querySelectorAll(`[${ownMarkupAttribute}]`)) {
+    own.remove();
+  }
+  return copy.outerHTML;
+};
+
 /** Post one Feedback to the Session through the relay; whether it queued. */
 const postFeedback = (
   key: string,
@@ -505,7 +522,7 @@ const postFeedback = (
     body: JSON.stringify({
       message,
       annotations: annotations.map(toWire),
-      domSnapshot: document.documentElement.outerHTML,
+      domSnapshot: appSnapshot(),
     }),
   })
     .then((response) => response.ok)
@@ -648,6 +665,8 @@ const reviewControls = (
     },
   });
 
+  annotator.overlay.host.setAttribute(ownMarkupAttribute, "");
+
   toggle.addEventListener("click", () => {
     const armed = toggle.getAttribute("aria-pressed") !== "true";
     toggle.setAttribute("aria-pressed", String(armed));
@@ -781,6 +800,7 @@ const renderPanel = (
 const mountOverlay = (): void => {
   const host = document.createElement("intervu-overlay");
   host.popover = "manual";
+  host.setAttribute(ownMarkupAttribute, "");
   const shadow = host.attachShadow({ mode: "open" });
 
   const style = document.createElement("style");
