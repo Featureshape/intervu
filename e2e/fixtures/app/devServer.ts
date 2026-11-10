@@ -9,6 +9,7 @@ import type { Plugin } from "vite";
 /** The deps Vite pre-bundles up front, so the first page load does not reload. */
 export const prebundledDeps = [
   "react",
+  "react-dom",
   "react-dom/client",
   "react/jsx-dev-runtime",
 ];

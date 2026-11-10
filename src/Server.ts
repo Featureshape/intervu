@@ -19,6 +19,8 @@ import { ArtifactWatcher } from "./ArtifactWatcher.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
 import * as FeedbackWait from "./FeedbackWait.ts";
 import {
+  AppSessionRequest,
+  AppSessionResponse,
   EndRequest,
   EndResponse,
   EndRiderRequest,
@@ -114,6 +116,41 @@ const sessionsRoute = HttpRouter.add(
   }).pipe(
     Effect.catch((error) =>
       Effect.logError("POST /sessions failed", error).pipe(
+        Effect.as(HttpServerResponse.empty({ status: 500 })),
+      ),
+    ),
+  ),
+);
+
+/**
+ * The in-page overlay's question, relayed by the `intervu/vite` plugin: is an
+ * `app` Session open for this dev-server origin (ADR 0022)? A lookup without
+ * create, so a page can never open a Session itself. A malformed query is a
+ * `400`; an origin no `app` Session was opened for answers `session: null`.
+ */
+const appSessionRoute = HttpRouter.add(
+  "GET",
+  "/apps/session",
+  Effect.gen(function* () {
+    const store = yield* SessionStore;
+    const query =
+      yield* HttpServerRequest.schemaSearchParams(AppSessionRequest);
+    const session = yield* store.getByPath(query.origin);
+    const app = Option.filter(session, (found) => found.kind === "app");
+    return HttpServerResponse.jsonUnsafe(
+      AppSessionResponse.make({
+        session: Option.match(app, {
+          onNone: () => null,
+          onSome: (found) => ({ key: found.key, status: found.status }),
+        }),
+      }),
+    );
+  }).pipe(
+    Effect.catchTag("SchemaError", () =>
+      Effect.succeed(HttpServerResponse.empty({ status: 400 })),
+    ),
+    Effect.catch((error) =>
+      Effect.logError("GET /apps/session failed", error).pipe(
         Effect.as(HttpServerResponse.empty({ status: 500 })),
       ),
     ),
@@ -611,6 +648,7 @@ export const layer = HttpRouter.serve(
   Layer.mergeAll(
     healthRoute,
     sessionsRoute,
+    appSessionRoute,
     chromeRoute,
     artifactRoute,
     sourceRoute,

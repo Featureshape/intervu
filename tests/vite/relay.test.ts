@@ -3,6 +3,7 @@ import {
   type GuardInput,
   guardRequest,
   isRelayedRoute,
+  ownOriginOf,
 } from "../../src/vite/relay.ts";
 
 /**
@@ -105,5 +106,16 @@ describe("isRelayedRoute", () => {
     expect(isRelayedRoute("GET", "/health?x=1")).toBe(false);
     expect(isRelayedRoute("POST", "/sessions")).toBe(false);
     expect(isRelayedRoute("GET", "/s/abc/a/index.html")).toBe(false);
+  });
+});
+
+describe("ownOriginOf", () => {
+  it("is the origin a page reached the dev server by", () => {
+    expect(ownOriginOf({ host: "localhost:5173", https: false })).toBe(
+      "http://localhost:5173",
+    );
+    expect(ownOriginOf({ host: "127.0.0.1:4443", https: true })).toBe(
+      "https://127.0.0.1:4443",
+    );
   });
 });

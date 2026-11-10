@@ -2,13 +2,15 @@ import type { Plugin } from "vite";
 import { daemonPortFrom } from "../DaemonPort.ts";
 import { loadOverlayJs } from "./overlayAsset.ts";
 import {
+  answerSessionLookup,
   guardInputOf,
   guardRequest,
   isRelayedRoute,
-  relayPrefix,
+  ownOriginOf,
   relayToDaemon,
   sendError,
 } from "./relay.ts";
+import { overlayPath, relayPrefix, sessionPath } from "./relayPaths.ts";
 
 /**
  * `intervu/vite`: the Vite plugin that puts intervu into a running app for URL
@@ -16,15 +18,13 @@ import {
  * sees it) it
  *
  * - injects the in-page overlay script into every HTML page, and
- * - mounts the same-origin relay under `/__intervu/`, which serves that script
- *   and forwards the page's traffic to the loopback daemon.
+ * - mounts the same-origin relay under `/__intervu/`, which serves that script,
+ *   answers its Session lookup and forwards the page's traffic to the loopback
+ *   daemon.
  *
  * It is published as dependency-free ESM because Vite runs it on Node, while the
  * `intervu` binary needs Bun (ADR 0018).
  */
-
-/** The relay path that serves the overlay script. */
-const overlayPath = "/overlay.js";
 
 /** The Vite plugin that wires intervu's URL mode into the dev server. */
 export const intervu = (): Plugin => ({
@@ -39,9 +39,8 @@ export const intervu = (): Plugin => ({
     const overlay = loadOverlayJs();
 
     server.middlewares.use(relayPrefix, (request, response) => {
-      const rejection = guardRequest(
-        guardInputOf(request, { https, allowedHosts }),
-      );
+      const guardInput = guardInputOf(request, { https, allowedHosts });
+      const rejection = guardRequest(guardInput);
       if (rejection !== null) {
         sendError(
           response,
@@ -67,6 +66,11 @@ export const intervu = (): Plugin => ({
             sendError(response, 500, "OverlayBuildFailed", build.reason);
           }
         });
+        return;
+      }
+
+      if (method === "GET" && path === sessionPath) {
+        answerSessionLookup(response, port, ownOriginOf(guardInput));
         return;
       }
 

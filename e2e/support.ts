@@ -43,6 +43,14 @@ export const noPluginAppUrl = `http://localhost:${noPluginAppPort}`;
 export const endableAppPort = 51997;
 export const endableAppUrl = `http://localhost:${endableAppPort}`;
 
+/**
+ * The same fixture app wired to the harness daemon, for the floating-panel spec:
+ * it ends and re-opens this origin's Session to watch the badge give way to the
+ * panel, so no other spec may hold that Session open.
+ */
+export const panelAppPort = 51998;
+export const panelAppUrl = `http://localhost:${panelAppPort}`;
+
 /** A port no app listens on, for `intervu <url>` to find nothing at. */
 export const unreachableAppUrl = "http://localhost:51996";
 

@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { SessionKind } from "./Session.ts";
+import { SessionKind, SessionStatus } from "./Session.ts";
 
 /**
  * The wire schemas for the daemon's HTTP surface. The CLI (client) and the
@@ -27,6 +27,29 @@ export class OpenSessionRequest extends Schema.Class<OpenSessionRequest>(
 )({
   path: Schema.String,
   kind: SessionKind,
+}) {}
+
+/**
+ * `GET /apps/session` search params: the dev-server origin a page runs on, as
+ * the `intervu/vite` relay reads it off the page's own request (ADR 0022).
+ */
+export class AppSessionRequest extends Schema.Class<AppSessionRequest>(
+  "AppSessionRequest",
+)({
+  origin: Schema.String,
+}) {}
+
+/**
+ * `GET /apps/session` response body: the `app` Session keyed by that origin, or
+ * `null` when none was ever opened. A lookup, never a create, so a page asking
+ * cannot conjure a Session (the dormant badge's contract).
+ */
+export class AppSessionResponse extends Schema.Class<AppSessionResponse>(
+  "AppSessionResponse",
+)({
+  session: Schema.NullOr(
+    Schema.Struct({ key: Schema.String, status: SessionStatus }),
+  ),
 }) {}
 
 /**

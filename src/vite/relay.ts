@@ -9,9 +9,6 @@ import { isIP } from "node:net";
  * that a page on another origin could have sent.
  */
 
-/** The URL prefix the plugin mounts the relay under on the dev server. */
-export const relayPrefix = "/__intervu";
-
 /** The daemon routes the page may reach through the relay, by method. */
 const relayedRoutes: readonly {
   readonly method: string;
@@ -88,6 +85,11 @@ const isTrustedHostname = (
   );
 };
 
+/** The dev server's own origin, as a page that reached it via `Host` sees it. */
+export const ownOriginOf = (
+  input: Pick<GuardInput, "host" | "https">,
+): string => `${input.https ? "https" : "http"}://${input.host}`;
+
 /**
  * Decide whether a request to the relay came from the dev server's own origin.
  *
@@ -110,8 +112,7 @@ export const guardRequest = (input: GuardInput): GuardRejection | null => {
     return "cross-site-fetch";
   }
   if (input.origin !== undefined) {
-    const ownOrigin = `${input.https ? "https" : "http"}://${input.host}`;
-    if (input.origin !== ownOrigin) {
+    if (input.origin !== ownOriginOf(input)) {
       return "foreign-origin";
     }
   }
@@ -220,4 +221,58 @@ export const relayToDaemon = (
   // daemon connection too, so the daemon sees the live connection go away.
   response.on("close", () => upstream.destroy());
   request.pipe(upstream);
+};
+
+/** How long the relay waits for the daemon to answer a Session lookup. */
+const lookupTimeoutMs = 1_000;
+
+/** The relay's answer when no daemon is there to ask: no Session is open. */
+const noSession = JSON.stringify({ session: null });
+
+/**
+ * Answer the overlay's "is a Session open for this origin?" by asking the
+ * daemon's `GET /apps/session` for `origin`, the dev server's own origin as the
+ * page reached it. The overlay asks every second while it rests as the dormant
+ * badge, so a daemon that is not running, or not answering in time, is the
+ * ordinary "no Session" answer rather than a `502`: a failed request would print
+ * an error in the app's console that the page cannot suppress.
+ */
+export const answerSessionLookup = (
+  response: http.ServerResponse,
+  port: number,
+  origin: string,
+): void => {
+  const answer = (body: string): void => {
+    if (!response.headersSent && !response.destroyed) {
+      response.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      response.end(body);
+    }
+  };
+  const upstream = http.get(
+    {
+      host: "127.0.0.1",
+      port,
+      path: `/apps/session?${new URLSearchParams({ origin })}`,
+      timeout: lookupTimeoutMs,
+    },
+    (daemonResponse) => {
+      if (daemonResponse.statusCode !== 200) {
+        daemonResponse.resume();
+        answer(noSession);
+        return;
+      }
+      const chunks: Buffer[] = [];
+      daemonResponse.on("data", (chunk: Buffer) => chunks.push(chunk));
+      daemonResponse.on("end", () =>
+        answer(Buffer.concat(chunks).toString("utf8")),
+      );
+      daemonResponse.on("error", () => answer(noSession));
+    },
+  );
+  upstream.on("timeout", () => upstream.destroy());
+  upstream.on("error", () => answer(noSession));
+  response.on("close", () => upstream.destroy());
 };

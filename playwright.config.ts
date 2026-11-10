@@ -12,6 +12,8 @@ import {
   noDaemonAppUrl,
   noPluginAppPort,
   noPluginAppUrl,
+  panelAppPort,
+  panelAppUrl,
   previousViteAppDir,
   previousViteAppPort,
   previousViteAppUrl,
@@ -28,8 +30,9 @@ import {
  * `bun run test` (vitest) loop - run with `bun run test:e2e`.
  *
  * URL mode is proven against the fixture Vite + React app (`e2e/fixtures/app`),
- * served on Node with the `intervu/vite` plugin loaded from source: twice wired
- * to the harness daemon (one instance for specs that end its Session), once to
+ * served on Node with the `intervu/vite` plugin loaded from source: three times
+ * wired to the harness daemon (two instances for specs that end their Session),
+ * once to
  * a port no daemon listens on, and once without the plugin at all. The previous
  * Vite major serves the same app from its own workspace
  * (`e2e/fixtures/app-previous-vite`).
@@ -101,6 +104,13 @@ export default defineConfig({
       dir: fixtureAppDir,
       port: endableAppPort,
       url: endableAppUrl,
+      daemonPort,
+    }),
+    fixtureApp({
+      bin: viteBin,
+      dir: fixtureAppDir,
+      port: panelAppPort,
+      url: panelAppUrl,
       daemonPort,
     }),
     fixtureApp({
