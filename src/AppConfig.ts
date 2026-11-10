@@ -44,6 +44,7 @@ export class AppConfig extends Context.Service<
     readonly logFile: string;
     readonly homeDir: Option.Option<string>;
     readonly currentDir: string;
+    readonly browser: Option.Option<string>;
   }
 >()("@intervu/AppConfig") {
   static readonly layer = Layer.effect(
@@ -70,6 +71,11 @@ export class AppConfig extends Context.Service<
       // scopes the Skill and Hook, the way `homeDir` anchors the user-level
       // default. Always resolvable, so a plain string rather than an Option.
       const currentDir = process.cwd();
+      // The program that opens a browser tab, run with the URL as its only
+      // argument; unset means the OS default browser.
+      const browser = (yield* Config.option(
+        Config.string("INTERVU_BROWSER"),
+      )).pipe(Option.filter((value) => value.length > 0));
 
       const stateDir = Option.match(override, {
         onSome: (dir) => dir,
@@ -91,6 +97,7 @@ export class AppConfig extends Context.Service<
         logFile: path.join(stateDir, "server.log"),
         homeDir,
         currentDir,
+        browser,
       };
     }),
   );

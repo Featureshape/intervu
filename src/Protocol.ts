@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { SessionKind } from "./Session.ts";
 
 /**
  * The wire schemas for the daemon's HTTP surface. The CLI (client) and the
@@ -16,13 +17,16 @@ export class Health extends Schema.Class<Health>("Health")({
 }) {}
 
 /**
- * `POST /sessions` request body: the artifact's resolved realpath. The daemon
- * derives the Session key from this path, so the CLI resolves it before sending.
+ * `POST /sessions` request body: the Session's handle and what it reviews - an
+ * artifact's resolved realpath, or an app's origin (ADR 0022). The daemon
+ * derives the Session key from the handle, so the CLI normalizes it before
+ * sending. An absent `kind` is an artifact, as before URL mode.
  */
 export class OpenSessionRequest extends Schema.Class<OpenSessionRequest>(
   "OpenSessionRequest",
 )({
   path: Schema.String,
+  kind: SessionKind,
 }) {}
 
 /**

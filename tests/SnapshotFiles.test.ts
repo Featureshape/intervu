@@ -28,6 +28,7 @@ const withStateDir = (stateDir: string) =>
         logFile: `${stateDir}/server.log`,
         homeDir: Option.some("/home/tester"),
         currentDir: "/project",
+        browser: Option.none(),
       }),
     ),
   );

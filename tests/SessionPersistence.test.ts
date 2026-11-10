@@ -6,7 +6,12 @@ import { SessionPersistence } from "../src/SessionPersistence.ts";
 /** The in-memory persistence layer used by the store tests, exercised directly. */
 
 const sessionAt = (key: string, path: string) =>
-  new Session({ key: SessionKey.make(key), path, status: "open" });
+  new Session({
+    key: SessionKey.make(key),
+    path,
+    status: "open",
+    kind: "artifact",
+  });
 
 describe("SessionPersistence.memoryLayer", () => {
   it.effect("round-trips the saved session set", () =>

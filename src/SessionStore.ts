@@ -10,7 +10,7 @@ import {
 } from "effect";
 import * as Context from "effect/Context";
 import { ConversationEntry, type Feedback, type Role } from "./Protocol.ts";
-import { Session, SessionKey } from "./Session.ts";
+import { Session, SessionKey, type SessionKind } from "./Session.ts";
 import { SessionPersistence } from "./SessionPersistence.ts";
 
 type StoreError = PlatformError.PlatformError | Schema.SchemaError;
@@ -37,7 +37,10 @@ type StoreError = PlatformError.PlatformError | Schema.SchemaError;
 export class SessionStore extends Context.Service<
   SessionStore,
   {
-    readonly open: (path: string) => Effect.Effect<Session, StoreError>;
+    readonly open: (
+      path: string,
+      kind: SessionKind,
+    ) => Effect.Effect<Session, StoreError>;
     readonly end: (key: SessionKey) => Effect.Effect<void, StoreError>;
     readonly get: (key: SessionKey) => Effect.Effect<Option.Option<Session>>;
     readonly getByPath: (
@@ -78,7 +81,11 @@ export class SessionStore extends Context.Service<
         new Map<SessionKey, readonly ConversationEntry[]>(),
       );
 
-      /** Path-based key: SHA-256 hex of the realpath, truncated to 16 (ADR 0001). */
+      /**
+       * Handle-based key: SHA-256 hex of the artifact's realpath (ADR 0001) or
+       * the app's origin (ADR 0022), truncated to 16. A realpath is absolute and
+       * an origin starts with its scheme, so the two never share a key.
+       */
       const deriveKey = (path: string) =>
         Effect.gen(function* () {
           const digest = yield* crypto.digest(
@@ -92,7 +99,10 @@ export class SessionStore extends Context.Service<
           return SessionKey.make(hex);
         });
 
-      const open = Effect.fn("SessionStore.open")(function* (path: string) {
+      const open = Effect.fn("SessionStore.open")(function* (
+        path: string,
+        kind: SessionKind,
+      ) {
         return yield* SynchronizedRef.modifyEffect(ref, (sessions) =>
           Effect.gen(function* () {
             const key = yield* deriveKey(path);
@@ -104,14 +114,19 @@ export class SessionStore extends Context.Service<
               }
               // Resurrect an `ended` Session to `open` (ADR 0012): same key, no
               // duplicate state, so re-running `intervu <file>` revives a review.
-              const resurrected = new Session({ key, path, status: "open" });
+              const resurrected = new Session({
+                key,
+                path,
+                status: "open",
+                kind: existing.kind,
+              });
               const next = sessions.map((session) =>
                 session.key === key ? resurrected : session,
               );
               yield* persistence.save(next);
               return [resurrected, next] as const;
             }
-            const session = new Session({ key, path, status: "open" });
+            const session = new Session({ key, path, status: "open", kind });
             const next = [...sessions, session];
             yield* persistence.save(next);
             return [session, next] as const;
@@ -134,6 +149,7 @@ export class SessionStore extends Context.Service<
               key,
               path: existing.path,
               status: "ended",
+              kind: existing.kind,
             });
             const next = sessions.map((session) =>
               session.key === key ? ended : session,

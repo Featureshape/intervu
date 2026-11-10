@@ -1,8 +1,8 @@
-import * as os from "node:os";
-import * as path from "node:path";
 import process from "node:process";
 import { defineConfig, devices } from "@playwright/test";
 import {
+  daemonPort,
+  daemonStateDir,
   fixtureAppDir,
   fixtureAppPort,
   fixtureAppUrl,
@@ -29,9 +29,7 @@ import {
  * major serves the same app from its own workspace (`e2e/fixtures/app-previous-vite`).
  */
 
-const PORT = 51990;
-const baseURL = `http://127.0.0.1:${PORT}`;
-const stateDir = path.join(os.tmpdir(), "intervu-e2e-state");
+const baseURL = `http://127.0.0.1:${daemonPort}`;
 
 /**
  * Serve the fixture app with the Vite CLI `bin` from the config in `dir`, on
@@ -77,8 +75,8 @@ export default defineConfig({
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
       env: {
-        INTERVU_PORT: String(PORT),
-        INTERVU_STATE_DIR: stateDir,
+        INTERVU_PORT: String(daemonPort),
+        INTERVU_STATE_DIR: daemonStateDir,
       },
     },
     fixtureApp({
@@ -86,7 +84,7 @@ export default defineConfig({
       dir: fixtureAppDir,
       port: fixtureAppPort,
       url: fixtureAppUrl,
-      daemonPort: PORT,
+      daemonPort,
     }),
     fixtureApp({
       bin: viteBin,

@@ -1,8 +1,17 @@
 import { BunHttpServer, BunRuntime, BunServices } from "@effect/platform-bun";
-import { Cause, Console, Effect, FileSystem, Layer, Option } from "effect";
+import {
+  Cause,
+  Console,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Result,
+} from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 import { AppConfig, version } from "./AppConfig.ts";
+import * as AppUrl from "./AppUrl.ts";
 import { ArtifactWatcher } from "./ArtifactWatcher.ts";
 import * as Browser from "./Browser.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
@@ -64,34 +73,94 @@ const root = Command.make(bin, {}, () =>
 );
 
 /**
+ * The `open` target: an absolute `http(s)` URL selects URL mode (ADR 0022),
+ * anything else is the artifact file it always was. The URL is tried first, so
+ * a file path never reaches the URL parser's error.
+ */
+const openTarget = Argument.string("file|url").pipe(
+  Argument.filterMap(
+    AppUrl.parseAppUrl,
+    (raw) => `${raw} is not an http(s) URL`,
+  ),
+  Argument.orElseResult(() => Argument.file("file")),
+  Argument.withDescription(
+    "the HTML artifact to review, or a running app's URL such as http://localhost:5173",
+  ),
+);
+
+/**
  * `intervu open <file>` (and the bare-file alias): resolve the artifact's
  * realpath, ensure the daemon is up, open or resume the Session, pop a browser
  * tab at `/s/:key`, and print the Session as TOON.
  */
-const open = Command.make("open", { file: Argument.file("file") }, ({ file }) =>
-  Effect.gen(function* () {
-    const config = yield* AppConfig;
-    const fs = yield* FileSystem.FileSystem;
-    const lifecycle = yield* ServerLifecycle;
+const openArtifact = Effect.fn("openArtifact")(function* (file: string) {
+  const config = yield* AppConfig;
+  const fs = yield* FileSystem.FileSystem;
+  const lifecycle = yield* ServerLifecycle;
 
-    const realPath = yield* fs
-      .realPath(file)
-      .pipe(Effect.mapError(() => new ArtifactNotFound({ path: file })));
+  const realPath = yield* fs
+    .realPath(file)
+    .pipe(Effect.mapError(() => new ArtifactNotFound({ path: file })));
 
-    yield* lifecycle.ensure;
-    const session = yield* lifecycle.openSession(realPath);
+  yield* lifecycle.ensure;
+  const session = yield* lifecycle.openSession(realPath, "artifact");
 
-    const url = `http://${config.hostname}:${config.port}/s/${session.key}`;
-    yield* Browser.openTab(url);
+  const url = `http://${config.hostname}:${config.port}/s/${session.key}`;
+  yield* Browser.openTab(url, config.browser);
 
-    const view = Output.session({
-      key: session.key,
-      path: session.path,
-      status: session.status,
-      help: `review open - run 'intervu poll ${file}' to receive feedback`,
-    });
-    yield* emit(yield* Toon.encode(view));
-  }),
+  const view = Output.session({
+    key: session.key,
+    path: session.path,
+    status: session.status,
+    help: `review open - run 'intervu poll ${file}' to receive feedback`,
+  });
+  yield* emit(yield* Toon.encode(view));
+});
+
+/**
+ * `intervu open <url>` (and the bare-URL alias): URL mode (ADR 0022). Ensure the
+ * daemon is up and open or resume the Session for the URL's origin, so every
+ * route of one dev server lands in the same Session. The human already has the
+ * app open, so no tab opens unless `--open` asks for one, at the URL as given.
+ */
+const openApp = Effect.fn("openApp")(function* (
+  app: AppUrl.AppUrl,
+  openTab: boolean,
+) {
+  const config = yield* AppConfig;
+  const lifecycle = yield* ServerLifecycle;
+
+  yield* lifecycle.ensure;
+  const session = yield* lifecycle.openSession(app.origin, "app");
+
+  if (openTab) {
+    yield* Browser.openTab(app.url, config.browser);
+  }
+
+  const view = Output.appSession({
+    key: session.key,
+    origin: session.path,
+    status: session.status,
+    help: `review open - run 'intervu poll ${session.path}' to receive feedback`,
+  });
+  yield* emit(yield* Toon.encode(view));
+});
+
+const open = Command.make(
+  "open",
+  {
+    target: openTarget,
+    open: Flag.boolean("open").pipe(
+      Flag.withDescription(
+        "also open a browser tab at the URL (a file always opens one)",
+      ),
+    ),
+  },
+  ({ target, open }) =>
+    Result.match(target, {
+      onSuccess: (app) => openApp(app, open),
+      onFailure: openArtifact,
+    }),
 );
 
 /**
@@ -367,9 +436,10 @@ const cli = root.pipe(
 );
 
 /**
- * Bare `intervu <file>` aliases `intervu open <file>`. The CLI framework can't
- * mix a root positional argument with subcommands, so an unrecognized leading
- * token that isn't a flag is rewritten to `open <file>` before parsing.
+ * Bare `intervu <file>` and `intervu <url>` alias `intervu open <file|url>`. The
+ * CLI framework can't mix a root positional argument with subcommands, so an
+ * unrecognized leading token that isn't a flag is rewritten to `open <arg>`
+ * before parsing.
  */
 const knownSubcommands = new Set([
   "open",

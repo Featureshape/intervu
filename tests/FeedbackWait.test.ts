@@ -168,7 +168,7 @@ describe("FeedbackWait.wait", () => {
   it.effect("returns ended immediately on an already-ended Session", () =>
     Effect.gen(function* () {
       const store = yield* SessionStore;
-      const session = yield* store.open("/tmp/ended.html");
+      const session = yield* store.open("/tmp/ended.html", "artifact");
       yield* store.end(session.key);
 
       // No fork: an already-ended Session settles on the first drain, no block.
@@ -182,7 +182,7 @@ describe("FeedbackWait.wait", () => {
   it.effect("ended carries the final feedback in one settle (Send & end)", () =>
     Effect.gen(function* () {
       const store = yield* SessionStore;
-      const session = yield* store.open("/tmp/sendend.html");
+      const session = yield* store.open("/tmp/sendend.html", "artifact");
 
       // The end handler commits the rider feedback and the status flip before any
       // signal (ADR 0011), so one settle drains both - the store is the truth.
@@ -201,7 +201,7 @@ describe("FeedbackWait.wait", () => {
     Effect.gen(function* () {
       const hub = yield* SessionHub;
       const store = yield* SessionStore;
-      const session = yield* store.open("/tmp/plainend.html");
+      const session = yield* store.open("/tmp/plainend.html", "artifact");
 
       const fiber = yield* FeedbackWait.wait(session.key).pipe(
         Effect.forkChild,

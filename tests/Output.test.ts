@@ -59,6 +59,25 @@ describe("Output.session", () => {
   });
 });
 
+describe("Output.appSession", () => {
+  it("shapes the URL-mode session view in canonical key order", () => {
+    const view = Output.appSession({
+      help: "next",
+      status: "open",
+      origin: "http://localhost:5173",
+      key: "abc",
+    });
+
+    expect(Object.keys(view)).toEqual(["key", "origin", "status", "help"]);
+    expect(view).toEqual({
+      key: "abc",
+      origin: "http://localhost:5173",
+      status: "open",
+      help: "next",
+    });
+  });
+});
+
 describe("Output.error", () => {
   it("shapes a structured error view", () => {
     const view = Output.error({

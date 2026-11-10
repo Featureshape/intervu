@@ -80,6 +80,7 @@ const testConfig = (homeDir: Option.Option<string>) =>
     logFile: "/state/server.log",
     homeDir,
     currentDir: PROJECT,
+    browser: Option.none(),
   });
 
 /**

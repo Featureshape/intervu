@@ -18,6 +18,10 @@ import {
  * own actionability and needs no extra gate).
  */
 
+/** The harness daemon's loopback port and its throwaway state directory. */
+export const daemonPort = 51990;
+export const daemonStateDir = nodePath.join(os.tmpdir(), "intervu-e2e-state");
+
 /** The fixture Vite + React app, its plugin wired to the harness daemon. */
 export const fixtureAppPort = 51991;
 export const fixtureAppUrl = `http://localhost:${fixtureAppPort}`;

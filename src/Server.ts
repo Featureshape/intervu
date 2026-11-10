@@ -74,6 +74,21 @@ const withSession = <R>(
     });
   });
 
+/**
+ * `withSession` for the routes that serve an artifact's file - its chrome page,
+ * its bytes and their sibling assets. An `app` Session has no file behind its
+ * handle (the handle is an origin, ADR 0022), so it gets the same `404` as an
+ * unknown key rather than a read of a path that is not one.
+ */
+const withArtifactSession = <R>(
+  use: (
+    session: Session,
+  ) => Effect.Effect<HttpServerResponse.HttpServerResponse, never, R>,
+) =>
+  withSession((session) =>
+    session.kind === "artifact" ? use(session) : Effect.succeed(notFound()),
+  );
+
 const healthRoute = HttpRouter.add(
   "GET",
   "/health",
@@ -89,11 +104,12 @@ const sessionsRoute = HttpRouter.add(
   Effect.gen(function* () {
     const store = yield* SessionStore;
     const body = yield* HttpServerRequest.schemaBodyJson(OpenSessionRequest);
-    const session = yield* store.open(body.path);
+    const session = yield* store.open(body.path, body.kind);
     return HttpServerResponse.jsonUnsafe({
       key: session.key,
       path: session.path,
       status: session.status,
+      kind: session.kind,
     });
   }).pipe(
     Effect.catch((error) =>
@@ -108,7 +124,7 @@ const sessionsRoute = HttpRouter.add(
 const chromeRoute = HttpRouter.add(
   "GET",
   "/s/:key",
-  withSession((session) =>
+  withArtifactSession((session) =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const watcher = yield* ArtifactWatcher;
@@ -136,7 +152,7 @@ const chromeRoute = HttpRouter.add(
 const artifactRoute = HttpRouter.add(
   "GET",
   "/s/:key/a/*",
-  withSession((session) =>
+  withArtifactSession((session) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -183,7 +199,7 @@ const artifactRoute = HttpRouter.add(
 const sourceRoute = HttpRouter.add(
   "GET",
   "/s/:key/source",
-  withSession((session) =>
+  withArtifactSession((session) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       return yield* fs.readFileString(session.path).pipe(
