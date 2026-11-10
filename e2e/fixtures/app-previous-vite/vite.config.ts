@@ -5,11 +5,11 @@ import { intervu } from "../../../src/vite/plugin.ts";
 import { prebundledDeps, viteVersionHeader } from "../app/devServer.ts";
 
 /**
- * The fixture app served by the previous Vite major. This workspace pins that
+ * The fixture app served by the previous Vite major. This package pins that
  * Vite and the `@vitejs/plugin-react` that supports it, and serves the same app
  * (`../app`) with the `intervu/vite` plugin loaded from source. Bump the `vite`
  * pin in `./package.json` with the root's Vite major: the dormant-badge spec
- * fails while this workspace is not exactly one major behind.
+ * fails while this package is not exactly one major behind.
  */
 export default defineConfig({
   root: nodePath.join(import.meta.dirname, "..", "app"),

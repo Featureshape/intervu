@@ -40,8 +40,10 @@ import {
  * wired to the harness daemon (four instances for specs that end their Session
  * or count its Conversation), once to a port no daemon listens on, and once
  * without the plugin at all. The previous Vite major serves the same app from
- * its own workspace
- * (`e2e/fixtures/app-previous-vite`).
+ * its own package (`e2e/fixtures/app-previous-vite`), installed from its own
+ * lockfile before it starts. It is not a workspace of the root package: a root
+ * `workspaces` field makes changesets treat the repo as a monorepo and refuse to
+ * version `intervu` itself.
  */
 
 const baseURL = `http://127.0.0.1:${daemonPort}`;
@@ -50,7 +52,8 @@ const baseURL = `http://127.0.0.1:${daemonPort}`;
  * Serve the fixture app with the Vite CLI `bin` from the config in `dir` (or
  * the file `config` there), on `port`, with `INTERVU_PORT` set to `daemonPort`
  * for its plugin, if the config loads one. `FIXTURE_APP_PORT` names `port` for
- * a config that keys its dependency cache by instance.
+ * a config that keys its dependency cache by instance. With `install`, `dir`'s
+ * own lockfile is installed first, for a fixture that pins its own Vite.
  */
 const fixtureApp = ({
   bin,
@@ -59,6 +62,7 @@ const fixtureApp = ({
   port,
   url,
   daemonPort,
+  install = false,
 }: {
   readonly bin: string;
   readonly dir: string;
@@ -66,8 +70,9 @@ const fixtureApp = ({
   readonly port: number;
   readonly url: string;
   readonly daemonPort: number;
+  readonly install?: boolean;
 }) => ({
-  command: `node "${bin}"${config === undefined ? "" : ` --config ${config}`} --port ${port} --strictPort`,
+  command: `${install ? "bun install --frozen-lockfile && " : ""}node "${bin}"${config === undefined ? "" : ` --config ${config}`} --port ${port} --strictPort`,
   cwd: dir,
   url,
   reuseExistingServer: !process.env.CI,
@@ -129,6 +134,7 @@ export default defineConfig({
       port: previousViteAppPort,
       url: previousViteAppUrl,
       daemonPort: unusedDaemonPort,
+      install: true,
     }),
   ],
 });

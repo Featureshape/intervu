@@ -38,9 +38,6 @@
   "files": [
     "dist"
   ],
-  "workspaces": [
-    "e2e/fixtures/app-previous-vite"
-  ],
   "engines": {
     "bun": ">=1.1.0"
   },
