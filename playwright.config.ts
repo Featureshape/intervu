@@ -3,11 +3,13 @@ import * as path from "node:path";
 import process from "node:process";
 import { defineConfig, devices } from "@playwright/test";
 import {
+  fixtureAppDir,
   fixtureAppPort,
   fixtureAppUrl,
   noDaemonAppPort,
   noDaemonAppUrl,
   unusedDaemonPort,
+  viteBin,
 } from "./e2e/support.ts";
 
 /**
@@ -25,12 +27,10 @@ import {
 const PORT = 51990;
 const baseURL = `http://127.0.0.1:${PORT}`;
 const stateDir = path.join(os.tmpdir(), "intervu-e2e-state");
-const fixtureAppDir = path.join(import.meta.dirname, "e2e", "fixtures", "app");
-const vite = path.join(import.meta.dirname, "node_modules", "vite", "bin");
 
 /** Serve the fixture app on `port` with its plugin pointed at `daemonPort`. */
 const fixtureApp = (port: number, url: string, daemonPort: number) => ({
-  command: `node ${path.join(vite, "vite.js")} --port ${port} --strictPort`,
+  command: `node "${viteBin}" --port ${port} --strictPort`,
   cwd: fixtureAppDir,
   url,
   reuseExistingServer: !process.env.CI,
