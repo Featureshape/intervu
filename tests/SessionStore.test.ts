@@ -25,7 +25,7 @@ describe("SessionStore", () => {
     Effect.gen(function* () {
       const store = yield* SessionStore;
 
-      const session = yield* store.open("/tmp/a.html");
+      const session = yield* store.open("/tmp/a.html", "artifact");
       expect(session.path).toBe("/tmp/a.html");
       expect(session.status).toBe("open");
 
@@ -44,9 +44,9 @@ describe("SessionStore", () => {
     Effect.gen(function* () {
       const store = yield* SessionStore;
 
-      const first = yield* store.open("/tmp/a.html");
-      const again = yield* store.open("/tmp/a.html");
-      const other = yield* store.open("/tmp/b.html");
+      const first = yield* store.open("/tmp/a.html", "artifact");
+      const again = yield* store.open("/tmp/a.html", "artifact");
+      const other = yield* store.open("/tmp/b.html", "artifact");
 
       expect(first.key).toBe(again.key);
       expect(first.key).not.toBe(other.key);
@@ -58,8 +58,8 @@ describe("SessionStore", () => {
     Effect.gen(function* () {
       const store = yield* SessionStore;
 
-      const first = yield* store.open("/tmp/a.html");
-      const second = yield* store.open("/tmp/a.html");
+      const first = yield* store.open("/tmp/a.html", "artifact");
+      const second = yield* store.open("/tmp/a.html", "artifact");
 
       expect(second.key).toBe(first.key);
       const all = yield* store.list;
@@ -70,7 +70,7 @@ describe("SessionStore", () => {
   it.effect("persists opened Sessions through the port", () =>
     Effect.gen(function* () {
       const store = yield* SessionStore;
-      const session = yield* store.open("/tmp/a.html");
+      const session = yield* store.open("/tmp/a.html", "artifact");
 
       const persistence = yield* SessionPersistence;
       const persisted = yield* persistence.load;
@@ -85,7 +85,7 @@ describe("SessionStore", () => {
     () =>
       Effect.gen(function* () {
         const store = yield* SessionStore;
-        const session = yield* store.open("/tmp/a.html");
+        const session = yield* store.open("/tmp/a.html", "artifact");
 
         yield* store.queueFeedback(session.key, feedbackWith("first"));
         yield* store.queueFeedback(session.key, feedbackWith("second"));
@@ -105,7 +105,7 @@ describe("SessionStore", () => {
   it.effect("takeFeedback on a never-queued key is empty, not an error", () =>
     Effect.gen(function* () {
       const store = yield* SessionStore;
-      const session = yield* store.open("/tmp/a.html");
+      const session = yield* store.open("/tmp/a.html", "artifact");
 
       const drained = yield* store.takeFeedback(session.key);
       expect(drained).toHaveLength(0);
@@ -115,11 +115,11 @@ describe("SessionStore", () => {
   it.effect("re-opening a path preserves its queued feedback", () =>
     Effect.gen(function* () {
       const store = yield* SessionStore;
-      const first = yield* store.open("/tmp/a.html");
+      const first = yield* store.open("/tmp/a.html", "artifact");
       yield* store.queueFeedback(first.key, feedbackWith("queued"));
 
       // The idempotent reopen must not drop the in-flight queue.
-      yield* store.open("/tmp/a.html");
+      yield* store.open("/tmp/a.html", "artifact");
 
       const drained = yield* store.takeFeedback(first.key);
       expect(drained.map((feedback) => feedback.message)).toEqual(["queued"]);
@@ -129,7 +129,7 @@ describe("SessionStore", () => {
   it.effect("end flips open -> ended and persists", () =>
     Effect.gen(function* () {
       const store = yield* SessionStore;
-      const session = yield* store.open("/tmp/a.html");
+      const session = yield* store.open("/tmp/a.html", "artifact");
 
       yield* store.end(session.key);
 
@@ -145,7 +145,7 @@ describe("SessionStore", () => {
   it.effect("end is idempotent on an already-ended Session", () =>
     Effect.gen(function* () {
       const store = yield* SessionStore;
-      const session = yield* store.open("/tmp/a.html");
+      const session = yield* store.open("/tmp/a.html", "artifact");
 
       yield* store.end(session.key);
       // A second end is a no-op: still ended, still one Session.
@@ -170,10 +170,10 @@ describe("SessionStore", () => {
   it.effect("re-opening an ended Session resurrects it to open", () =>
     Effect.gen(function* () {
       const store = yield* SessionStore;
-      const first = yield* store.open("/tmp/a.html");
+      const first = yield* store.open("/tmp/a.html", "artifact");
       yield* store.end(first.key);
 
-      const resurrected = yield* store.open("/tmp/a.html");
+      const resurrected = yield* store.open("/tmp/a.html", "artifact");
 
       // Same key, back to open, no duplicate state (ADR 0012).
       expect(resurrected.key).toBe(first.key);
@@ -188,15 +188,56 @@ describe("SessionStore", () => {
     }).pipe(Effect.provide(storeLayer())),
   );
 
+  it.effect("an app Session is keyed by its origin and keeps its kind", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      const app = yield* store.open("http://localhost:5173", "app");
+      const again = yield* store.open("http://localhost:5173", "app");
+      const artifact = yield* store.open("/tmp/a.html", "artifact");
+
+      expect(app.kind).toBe("app");
+      expect(app.path).toBe("http://localhost:5173");
+      expect(again.key).toBe(app.key);
+      expect(artifact.kind).toBe("artifact");
+      expect(artifact.key).not.toBe(app.key);
+
+      const found = yield* store.getByPath("http://localhost:5173");
+      expect(Option.getOrUndefined(found)?.key).toBe(app.key);
+
+      const persistence = yield* SessionPersistence;
+      const persisted = yield* persistence.load;
+      expect(persisted.map((session) => session.kind)).toEqual([
+        "app",
+        "artifact",
+      ]);
+    }).pipe(Effect.provide(storeLayer())),
+  );
+
+  it.effect("ending and resurrecting an app Session keeps its kind", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      const app = yield* store.open("http://localhost:5173", "app");
+      yield* store.end(app.key);
+
+      const ended = yield* store.get(app.key);
+      expect(Option.getOrUndefined(ended)?.kind).toBe("app");
+
+      const resurrected = yield* store.open("http://localhost:5173", "app");
+      expect(resurrected.key).toBe(app.key);
+      expect(resurrected.status).toBe("open");
+      expect(resurrected.kind).toBe("app");
+    }).pipe(Effect.provide(storeLayer())),
+  );
+
   it.effect("end preserves the queued feedback for a resurrect", () =>
     Effect.gen(function* () {
       const store = yield* SessionStore;
-      const session = yield* store.open("/tmp/a.html");
+      const session = yield* store.open("/tmp/a.html", "artifact");
       yield* store.queueFeedback(session.key, feedbackWith("survives"));
 
       // end touches only status + persistence, never the transient queue (ADR 0002).
       yield* store.end(session.key);
-      yield* store.open("/tmp/a.html");
+      yield* store.open("/tmp/a.html", "artifact");
 
       const drained = yield* store.takeFeedback(session.key);
       expect(drained.map((feedback) => feedback.message)).toEqual(["survives"]);
@@ -206,7 +247,7 @@ describe("SessionStore", () => {
   it.effect("getByPath resolves the same Session as the derived key", () =>
     Effect.gen(function* () {
       const store = yield* SessionStore;
-      const opened = yield* store.open("/tmp/a.html");
+      const opened = yield* store.open("/tmp/a.html", "artifact");
 
       const found = yield* store.getByPath("/tmp/a.html");
       expect(Option.getOrUndefined(found)?.key).toBe(opened.key);
@@ -219,7 +260,7 @@ describe("SessionStore", () => {
   it.effect("appendConversation stamps a monotonic 1-based seq per key", () =>
     Effect.gen(function* () {
       const store = yield* SessionStore;
-      const session = yield* store.open("/tmp/a.html");
+      const session = yield* store.open("/tmp/a.html", "artifact");
 
       const first = yield* store.appendConversation(session.key, {
         role: "human",
@@ -245,7 +286,7 @@ describe("SessionStore", () => {
     () =>
       Effect.gen(function* () {
         const store = yield* SessionStore;
-        const session = yield* store.open("/tmp/a.html");
+        const session = yield* store.open("/tmp/a.html", "artifact");
 
         yield* store.appendConversation(session.key, {
           role: "human",
@@ -274,8 +315,8 @@ describe("SessionStore", () => {
   it.effect("conversations are keyed per Session", () =>
     Effect.gen(function* () {
       const store = yield* SessionStore;
-      const a = yield* store.open("/tmp/a.html");
-      const b = yield* store.open("/tmp/b.html");
+      const a = yield* store.open("/tmp/a.html", "artifact");
+      const b = yield* store.open("/tmp/b.html", "artifact");
 
       yield* store.appendConversation(a.key, {
         role: "human",
@@ -309,6 +350,7 @@ describe("SessionStore", () => {
             key: SessionKey.make("seedkey000000000"),
             path: "/tmp/seed.html",
             status: "open",
+            kind: "artifact",
           }),
         ]),
       ),

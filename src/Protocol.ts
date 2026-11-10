@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { SessionKind, SessionStatus } from "./Session.ts";
 
 /**
  * The wire schemas for the daemon's HTTP surface. The CLI (client) and the
@@ -16,13 +17,39 @@ export class Health extends Schema.Class<Health>("Health")({
 }) {}
 
 /**
- * `POST /sessions` request body: the artifact's resolved realpath. The daemon
- * derives the Session key from this path, so the CLI resolves it before sending.
+ * `POST /sessions` request body: the Session's handle and what it reviews - an
+ * artifact's resolved realpath, or an app's origin (ADR 0022). The daemon
+ * derives the Session key from the handle, so the CLI normalizes it before
+ * sending. An absent `kind` is an artifact, as before URL mode.
  */
 export class OpenSessionRequest extends Schema.Class<OpenSessionRequest>(
   "OpenSessionRequest",
 )({
   path: Schema.String,
+  kind: SessionKind,
+}) {}
+
+/**
+ * `GET /apps/session` search params: the dev-server origin a page runs on, as
+ * the `intervu/vite` relay reads it off the page's own request (ADR 0022).
+ */
+export class AppSessionRequest extends Schema.Class<AppSessionRequest>(
+  "AppSessionRequest",
+)({
+  origin: Schema.String,
+}) {}
+
+/**
+ * `GET /apps/session` response body: the `app` Session keyed by that origin, or
+ * `null` when none was ever opened. A lookup, never a create, so a page asking
+ * cannot conjure a Session (the dormant badge's contract).
+ */
+export class AppSessionResponse extends Schema.Class<AppSessionResponse>(
+  "AppSessionResponse",
+)({
+  session: Schema.NullOr(
+    Schema.Struct({ key: Schema.String, status: SessionStatus }),
+  ),
 }) {}
 
 /**
@@ -30,12 +57,20 @@ export class OpenSessionRequest extends Schema.Class<OpenSessionRequest>(
  * "Annotation"; ADR 0005), discriminated on `kind` to match what the chrome
  * posts. The iframe-minted `id` is dropped at this boundary: queue order is the
  * ordering this slice and the poll's 1-based `n` is the badge the human saw.
+ *
+ * An annotation made on a live app in URL mode also carries `pageUrl`, the page
+ * it was made on, and, when the clicked element or an ancestor came from the
+ * app's own JSX, `source`: that element's `file:line:col`, read from the
+ * `data-intervu-src` stamp of the `intervu/vite` plugin. An artifact annotation
+ * has neither.
  */
 const ElementAnnotation = Schema.Struct({
   kind: Schema.Literal("element"),
   selector: Schema.String,
   tag: Schema.String,
   text: Schema.String,
+  source: Schema.optional(Schema.String),
+  pageUrl: Schema.optional(Schema.String),
 });
 
 /** A `text` annotation also carries the selected run of text it anchors to. */
@@ -45,6 +80,8 @@ const TextAnnotation = Schema.Struct({
   tag: Schema.String,
   text: Schema.String,
   selectedText: Schema.String,
+  source: Schema.optional(Schema.String),
+  pageUrl: Schema.optional(Schema.String),
 });
 
 /** Either annotation kind; discriminated on `kind`. */

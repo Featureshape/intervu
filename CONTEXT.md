@@ -11,8 +11,12 @@ The agent-generated HTML file - plus any sibling assets it references by relativ
 _Avoid_: file, document, page
 
 **Session**:
-The review context for one artifact - its queue of pending feedback, its conversation (feedback and agent-replies), and a reversible status (`open` -> `ended` via an **End**, then back to `open` if the path is re-opened) - identified by a key derived from the artifact's normalized absolute path (`hash(realpath)`), stable across the agent's edits so that re-running `open` on the same path resumes the same Session. Because the key is path-based there is exactly one Session per path, so `end` is reversible (a re-open resurrects an `ended` Session to `open`), not destructive.
+The review context for one artifact, or for one running app in **URL mode** - its queue of pending feedback, its conversation (feedback and agent-replies), and a reversible status (`open` -> `ended` via an **End**, then back to `open` if the path is re-opened) - identified by a key derived from its handle: the artifact's normalized absolute path (`hash(realpath)`), or the app's origin (ADR 0022). The key is stable across the agent's edits so that re-running `open` on the same path, or on any URL of the same origin, resumes the same Session. Because the key is handle-based there is exactly one Session per handle, so `end` is reversible (a re-open resurrects an `ended` Session to `open`), not destructive.
 _Avoid_: tab, window, connection
+
+**URL mode**:
+A Session whose target is a running dev-server origin (`intervu http://localhost:5173`) instead of an artifact on disk; the `intervu/vite` plugin puts intervu into the app's own tab. Its kind is `app`, beside the `artifact` kind (ADR 0022).
+_Avoid_: live mode, app mode, proxy mode
 
 **Chrome**:
 intervu's review UI wrapping the artifact: a slim top bar plus a conversation panel, rendered around the artifact's sandboxed iframe.

@@ -18,6 +18,98 @@ import {
  * own actionability and needs no extra gate).
  */
 
+/** The harness daemon's loopback port and its throwaway state directory. */
+export const daemonPort = 51990;
+export const daemonStateDir = nodePath.join(os.tmpdir(), "intervu-e2e-state");
+
+/** The fixture Vite + React app, its plugin wired to the harness daemon. */
+export const fixtureAppPort = 51991;
+export const fixtureAppUrl = `http://localhost:${fixtureAppPort}`;
+
+/** The same fixture app, its plugin pointed at a port no daemon listens on. */
+export const noDaemonAppPort = 51992;
+export const noDaemonAppUrl = `http://localhost:${noDaemonAppPort}`;
+export const unusedDaemonPort = 51993;
+
+/** The same fixture app served without the `intervu/vite` plugin. */
+export const noPluginAppPort = 51995;
+export const noPluginAppUrl = `http://localhost:${noPluginAppPort}`;
+
+/**
+ * The same fixture app wired to the harness daemon, for specs that end its
+ * Session: a Session is keyed by origin, so ending this one never races the
+ * specs that keep the fixture app's Session open.
+ */
+export const endableAppPort = 51997;
+export const endableAppUrl = `http://localhost:${endableAppPort}`;
+
+/**
+ * The same fixture app wired to the harness daemon, for the floating-panel spec:
+ * it ends and re-opens this origin's Session to watch the badge give way to the
+ * panel, so no other spec may hold that Session open.
+ */
+export const panelAppPort = 51998;
+export const panelAppUrl = `http://localhost:${panelAppPort}`;
+
+/**
+ * The same fixture app wired to the harness daemon, for the live-panel spec:
+ * it ends this origin's Session to watch the panel show the ended state, so no
+ * other spec may hold that Session open.
+ */
+export const conversationAppPort = 51999;
+export const conversationAppUrl = `http://localhost:${conversationAppPort}`;
+
+/**
+ * The same fixture app wired to the harness daemon, for the HMR and reload
+ * spec: it counts the Conversation and the pending annotations across an edit
+ * and a reload, so no other spec may send to that Session.
+ */
+export const reloadAppPort = 52000;
+export const reloadAppUrl = `http://localhost:${reloadAppPort}`;
+
+/**
+ * The same fixture app wired to the harness daemon, for the session-commands
+ * spec: it lists this origin's Session as open, then ends it, so no other spec
+ * may end or re-open that Session in between.
+ */
+export const commandsAppPort = 52001;
+export const commandsAppUrl = `http://localhost:${commandsAppPort}`;
+
+/** A port no app listens on, for `intervu <url>` to find nothing at. */
+export const unreachableAppUrl = "http://localhost:51996";
+
+/** The same fixture app on the previous Vite major, its daemon port unused. */
+export const previousViteAppPort = 51994;
+export const previousViteAppUrl = `http://localhost:${previousViteAppPort}`;
+
+/** The fixture app's directory, the root Vite serves and builds. */
+export const fixtureAppDir = nodePath.join(
+  import.meta.dirname,
+  "fixtures",
+  "app",
+);
+
+/** The workspace that serves the fixture app on the previous Vite major. */
+export const previousViteAppDir = nodePath.join(
+  import.meta.dirname,
+  "fixtures",
+  "app-previous-vite",
+);
+
+/** The Vite CLI installed under `nodeModules`, run on Node like a user's. */
+const viteBinIn = (nodeModules: string): string =>
+  nodePath.join(nodeModules, "vite", "bin", "vite.js");
+
+/** The current Vite major's CLI. */
+export const viteBin = viteBinIn(
+  nodePath.join(import.meta.dirname, "..", "node_modules"),
+);
+
+/** The previous Vite major's CLI, installed in its fixture workspace. */
+export const previousViteBin = viteBinIn(
+  nodePath.join(previousViteAppDir, "node_modules"),
+);
+
 /** The absolute path of the committed fixture, the artifact under review. */
 export const fixturePath = new URL("./fixtures/artifact.html", import.meta.url)
   .pathname;
@@ -90,15 +182,29 @@ export const armAnnotate = async (page: Page): Promise<void> => {
 };
 
 /** A non-null bounding box for `locator`, failing the test if it has none. */
-const boxOf = async (
+export const boxOf = async (
   locator: Locator,
 ): Promise<{ x: number; y: number; width: number; height: number }> => {
   const box = await locator.boundingBox();
   expect(box, "expected the element to have a bounding box").not.toBeNull();
-  if (box === null) {
-    return { x: 0, y: 0, width: 0, height: 0 };
-  }
-  return box;
+  return box ?? { x: 0, y: 0, width: 0, height: 0 };
+};
+
+/**
+ * Record the console errors and uncaught exceptions `page` reports into
+ * `problems`, and return it; pass one array to several tabs to share it.
+ */
+export const recordProblems = (
+  page: Page,
+  problems: string[] = [],
+): string[] => {
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      problems.push(`console: ${message.text()}`);
+    }
+  });
+  page.on("pageerror", (error) => problems.push(`pageerror: ${error.message}`));
+  return problems;
 };
 
 /** Drag-select the text of `locator` with a raw mouse gesture. */

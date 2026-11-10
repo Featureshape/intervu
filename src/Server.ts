@@ -17,8 +17,11 @@ import { AppConfig } from "./AppConfig.ts";
 import * as ArtifactAssets from "./ArtifactAssets.ts";
 import { ArtifactWatcher } from "./ArtifactWatcher.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
+import { appSessionPath } from "./DaemonRoutes.ts";
 import * as FeedbackWait from "./FeedbackWait.ts";
 import {
+  AppSessionRequest,
+  AppSessionResponse,
   EndRequest,
   EndResponse,
   EndRiderRequest,
@@ -74,6 +77,21 @@ const withSession = <R>(
     });
   });
 
+/**
+ * `withSession` for the routes that serve an artifact's file - its chrome page,
+ * its bytes and their sibling assets. An `app` Session has no file behind its
+ * handle (the handle is an origin, ADR 0022), so it gets the same `404` as an
+ * unknown key rather than a read of a path that is not one.
+ */
+const withArtifactSession = <R>(
+  use: (
+    session: Session,
+  ) => Effect.Effect<HttpServerResponse.HttpServerResponse, never, R>,
+) =>
+  withSession((session) =>
+    session.kind === "artifact" ? use(session) : Effect.succeed(notFound()),
+  );
+
 const healthRoute = HttpRouter.add(
   "GET",
   "/health",
@@ -89,11 +107,12 @@ const sessionsRoute = HttpRouter.add(
   Effect.gen(function* () {
     const store = yield* SessionStore;
     const body = yield* HttpServerRequest.schemaBodyJson(OpenSessionRequest);
-    const session = yield* store.open(body.path);
+    const session = yield* store.open(body.path, body.kind);
     return HttpServerResponse.jsonUnsafe({
       key: session.key,
       path: session.path,
       status: session.status,
+      kind: session.kind,
     });
   }).pipe(
     Effect.catch((error) =>
@@ -104,11 +123,46 @@ const sessionsRoute = HttpRouter.add(
   ),
 );
 
+/**
+ * The in-page overlay's question, relayed by the `intervu/vite` plugin: is an
+ * `app` Session open for this dev-server origin (ADR 0022)? A lookup without
+ * create, so a page can never open a Session itself. A malformed query is a
+ * `400`; an origin no `app` Session was opened for answers `session: null`.
+ */
+const appSessionRoute = HttpRouter.add(
+  "GET",
+  appSessionPath,
+  Effect.gen(function* () {
+    const store = yield* SessionStore;
+    const query =
+      yield* HttpServerRequest.schemaSearchParams(AppSessionRequest);
+    const session = yield* store.getByPath(query.origin);
+    const app = Option.filter(session, (found) => found.kind === "app");
+    return HttpServerResponse.jsonUnsafe(
+      AppSessionResponse.make({
+        session: Option.match(app, {
+          onNone: () => null,
+          onSome: (found) => ({ key: found.key, status: found.status }),
+        }),
+      }),
+    );
+  }).pipe(
+    Effect.catchTag("SchemaError", () =>
+      Effect.succeed(HttpServerResponse.empty({ status: 400 })),
+    ),
+    Effect.catch((error) =>
+      Effect.logError(`GET ${appSessionPath} failed`, error).pipe(
+        Effect.as(HttpServerResponse.empty({ status: 500 })),
+      ),
+    ),
+  ),
+);
+
 /** The stable opened URL: the chrome page wrapping the artifact's iframe. */
 const chromeRoute = HttpRouter.add(
   "GET",
   "/s/:key",
-  withSession((session) =>
+  withArtifactSession((session) =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const watcher = yield* ArtifactWatcher;
@@ -136,7 +190,7 @@ const chromeRoute = HttpRouter.add(
 const artifactRoute = HttpRouter.add(
   "GET",
   "/s/:key/a/*",
-  withSession((session) =>
+  withArtifactSession((session) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -183,7 +237,7 @@ const artifactRoute = HttpRouter.add(
 const sourceRoute = HttpRouter.add(
   "GET",
   "/s/:key/source",
-  withSession((session) =>
+  withArtifactSession((session) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       return yield* fs.readFileString(session.path).pipe(
@@ -483,7 +537,9 @@ const SSE_PING_INTERVAL = Duration.seconds(20);
  * scope (`Stream.unwrap` manages it), released when `BunHttpServer` interrupts
  * the handler on client disconnect - the same abort wiring as the poll (ADR
  * 0009). The handler's context is captured and re-provided to the body, which the
- * server runs after the handler returns.
+ * server runs after the handler returns. An `app` Session's in-page panel reads
+ * the same stream through the `intervu/vite` relay; it runs no watcher and gets
+ * no `ArtifactReloaded`, since Vite's HMR reloads the app.
  */
 const eventsRoute = HttpRouter.add(
   "GET",
@@ -502,11 +558,17 @@ const eventsRoute = HttpRouter.add(
           const store = yield* SessionStore;
           const watcher = yield* ArtifactWatcher;
           const subscription = yield* hub.subscribe(session.key);
-          yield* watcher.track(session.key, session.path);
-
-          // Read after `track`, so an edit is either in this version or arrives
-          // live. The chrome ignores a version it already shows (ADR 0020).
-          const version = yield* watcher.version(session.path);
+          // An `app` Session's handle is an origin, not a file: Vite's HMR
+          // reloads the app, so there is nothing to watch and no version.
+          const version =
+            session.kind === "artifact"
+              ? yield* watcher.track(session.key, session.path).pipe(
+                  // Read after `track`, so an edit is either in this version
+                  // or arrives live. The chrome ignores a version it already
+                  // shows (ADR 0020).
+                  Effect.andThen(watcher.version(session.path)),
+                )
+              : Option.none<string>();
           const replay = yield* store.conversationSince(session.key, afterSeq);
           const presence = yield* hub.presence(session.key);
           // Subscribe-then-check (mirror of the poll): read the status after
@@ -595,6 +657,7 @@ export const layer = HttpRouter.serve(
   Layer.mergeAll(
     healthRoute,
     sessionsRoute,
+    appSessionRoute,
     chromeRoute,
     artifactRoute,
     sourceRoute,

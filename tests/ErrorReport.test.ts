@@ -3,6 +3,7 @@ import { Option } from "effect";
 import { CliError } from "effect/unstable/cli";
 import * as ErrorReport from "../src/ErrorReport.ts";
 import {
+  AppUnreachable,
   ArtifactNotFound,
   ConflictingSetupScope,
   DaemonNotRunning,
@@ -25,6 +26,20 @@ describe("ErrorReport.report", () => {
     expect(value.error.tag).toBe("ArtifactNotFound");
     expect(value.error.message).toContain("/tmp/missing.html");
     expect(value.help).toContain("intervu <file>");
+  });
+
+  it("routes AppUnreachable to starting the dev server and re-running", () => {
+    const view = ErrorReport.report(
+      new AppUnreachable({ url: "http://localhost:5173/" }),
+      ctx,
+    );
+
+    const value = Option.getOrThrow(view);
+    expect(value.error.tag).toBe("AppUnreachable");
+    expect(value.error.message).toBe(
+      "nothing answered at http://localhost:5173/",
+    );
+    expect(value.help).toContain("intervu http://localhost:5173/");
   });
 
   it("routes ReviewNotOpen back to opening the path", () => {

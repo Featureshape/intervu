@@ -3,6 +3,7 @@ import * as Context from "effect/Context";
 import { version as packageVersion } from "../package.json" with {
   type: "json",
 };
+import { daemonPortFrom } from "./DaemonPort.ts";
 
 /**
  * The version reported by `GET /health` and `intervu --version`, read from
@@ -11,16 +12,8 @@ import { version as packageVersion } from "../package.json" with {
  */
 export const version = packageVersion;
 
-/** Default loopback port; `INTERVU_PORT` overrides. */
-const defaultPort = 51789;
-
 /** Default idle-shutdown grace in seconds; `INTERVU_IDLE_TIMEOUT` overrides. */
 const defaultIdleSeconds = 30;
-
-const Port = Schema.NumberFromString.pipe(
-  Schema.check(Schema.isInt()),
-  Schema.check(Schema.isBetween({ minimum: 1, maximum: 65535 })),
-);
 
 const IdleSeconds = Schema.NumberFromString.pipe(
   Schema.check(Schema.isInt()),
@@ -46,14 +39,16 @@ export class AppConfig extends Context.Service<
     readonly logFile: string;
     readonly homeDir: Option.Option<string>;
     readonly currentDir: string;
+    readonly browser: Option.Option<string>;
   }
 >()("@intervu/AppConfig") {
   static readonly layer = Layer.effect(
     AppConfig,
     Effect.gen(function* () {
       const path = yield* Path.Path;
-      const port = yield* Config.schema(Port, "INTERVU_PORT").pipe(
-        Config.orElse(() => Config.succeed(defaultPort)),
+      const port = yield* Config.string("INTERVU_PORT").pipe(
+        Config.option,
+        Config.map((raw) => daemonPortFrom(Option.getOrUndefined(raw))),
       );
       const idleSeconds = yield* Config.schema(
         IdleSeconds,
@@ -72,6 +67,11 @@ export class AppConfig extends Context.Service<
       // scopes the Skill and Hook, the way `homeDir` anchors the user-level
       // default. Always resolvable, so a plain string rather than an Option.
       const currentDir = process.cwd();
+      // The program that opens a browser tab, run with the URL as its only
+      // argument; unset means the OS default browser.
+      const browser = (yield* Config.option(
+        Config.string("INTERVU_BROWSER"),
+      )).pipe(Option.filter((value) => value.length > 0));
 
       const stateDir = Option.match(override, {
         onSome: (dir) => dir,
@@ -93,6 +93,7 @@ export class AppConfig extends Context.Service<
         logFile: path.join(stateDir, "server.log"),
         homeDir,
         currentDir,
+        browser,
       };
     }),
   );

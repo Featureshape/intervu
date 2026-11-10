@@ -1,0 +1,208 @@
+{
+  "spec": "spec/features/live-app-review/spec.md",
+  "commit": "f11d5f1c74c9314a97002ababdbf9c0508bb5ab0",
+  "branch": "slices/live-app-review",
+  "slices": [
+    {
+      "id": "S1",
+      "kind": "feature",
+      "title": "Show the dormant badge through the plugin's same-origin relay",
+      "behaviours": [1, 2, 22],
+      "seam": "a fixture Vite + React app",
+      "blocked_by": [],
+      "autonomy": "afk",
+      "done": {
+        "automated": [
+          "verify: with the daemon stopped, load the fixture app; the \"intervu: no agent\" badge shows, clicking it shows the `intervu <url>` command, and the console has no errors.",
+          "verify: send a `/__intervu/*` request with a foreign `Origin`; it is rejected.",
+          "verify: the existing artifact-mode E2E specs still pass unchanged."
+        ],
+        "manual": [
+          "A pixel check of the dormant badge on one of Daniel's real Vite apps."
+        ]
+      }
+    },
+    {
+      "id": "S2",
+      "kind": "feature",
+      "title": "Keep intervu out of production builds",
+      "behaviours": [23],
+      "seam": "a spec that runs `vite build`",
+      "blocked_by": ["S1"],
+      "autonomy": "afk",
+      "done": {
+        "automated": [
+          "verify: run `vite build` on the fixture app; the output contains no intervu code and no `data-intervu-src`."
+        ],
+        "manual": []
+      }
+    },
+    {
+      "id": "S3",
+      "kind": "feature",
+      "title": "Run the plugin on the previous Vite major",
+      "behaviours": [24],
+      "seam": "a fixture Vite + React app",
+      "blocked_by": ["S1"],
+      "autonomy": "afk",
+      "done": {
+        "automated": [
+          "verify: serve the fixture app on the current Vite major and on the one before it; the dormant badge shows and the console has no errors on both."
+        ],
+        "manual": []
+      }
+    },
+    {
+      "id": "S4",
+      "kind": "feature",
+      "title": "Open an origin-keyed Session from a URL",
+      "behaviours": [3, 5, 8, 26],
+      "seam": "a helper that runs the CLI",
+      "blocked_by": ["S1"],
+      "autonomy": "afk",
+      "done": {
+        "automated": [
+          "verify: run `intervu <fixture-url>`; the stdout TOON names the Session and the next `poll`, and no new tab opened.",
+          "verify: run `intervu <fixture-url> --open`; a browser tab is opened.",
+          "verify: run `intervu <fixture-url>` from a second route; the same Session key comes back.",
+          "verify: the existing artifact-mode E2E specs still pass unchanged."
+        ],
+        "manual": []
+      }
+    },
+    {
+      "id": "S5",
+      "kind": "feature",
+      "title": "Report an unreachable app and a missing plugin",
+      "behaviours": [6, 7],
+      "seam": "a helper that runs the CLI",
+      "blocked_by": ["S4"],
+      "autonomy": "afk",
+      "done": {
+        "automated": [
+          "verify: run `intervu <url>` against a port nothing listens on; it exits 1 with an `AppUnreachable` TOON error and no Session is created.",
+          "verify: run `intervu <url>` against the fixture app served without the plugin; the Session opens and the output carries the missing-plugin help line."
+        ],
+        "manual": []
+      }
+    },
+    {
+      "id": "S6",
+      "kind": "feature",
+      "title": "Address the origin's Session from poll, reply, end and the Home list",
+      "behaviours": [9, 10],
+      "seam": "a helper that runs the CLI",
+      "blocked_by": ["S4"],
+      "autonomy": "afk",
+      "done": {
+        "automated": [
+          "verify: after `intervu <fixture-url>`, bare `intervu` lists the URL-mode Session beside an open artifact Session.",
+          "verify: `poll <fixture-url>`, `reply <fixture-url> \"<msg>\"` and `end <fixture-url>` act on the origin's Session and print the same TOON shapes as for a file."
+        ],
+        "manual": []
+      }
+    },
+    {
+      "id": "S7",
+      "kind": "feature",
+      "title": "Replace the badge with the floating panel when a Session opens",
+      "behaviours": [4, 11, 12],
+      "seam": "a fixture Vite + React app",
+      "blocked_by": ["S1", "S4"],
+      "autonomy": "afk",
+      "done": {
+        "automated": [
+          "verify: run `intervu <fixture-url>`; within 2 seconds the overlay replaces the badge in the already-open tab without a page reload.",
+          "verify: drag and collapse the panel; it moves and collapses, and the app's viewport width does not change.",
+          "verify: a fixture element with a very high `z-index` stays below the panel."
+        ],
+        "manual": [
+          "A pixel check of the floating panel on one of Daniel's real Vite apps."
+        ]
+      }
+    },
+    {
+      "id": "S8",
+      "kind": "feature",
+      "title": "Annotate the live app with its JSX source",
+      "behaviours": [13, 14, 15],
+      "seam": "a fixture Vite + React app",
+      "blocked_by": ["S6", "S7"],
+      "autonomy": "afk",
+      "done": {
+        "automated": [
+          "verify: with annotate-mode off, clicking a fixture button runs its handler; with annotate-mode armed, the click creates an annotation and the handler does not run.",
+          "verify: arm annotate-mode, click a fixture element, send; `poll <fixture-url>` returns that Feedback with `source` matching the element's JSX `file:line:col` and the current `pageUrl`.",
+          "verify: click inside a fixture `node_modules` component; the annotation's `source` is the nearest app-code element."
+        ],
+        "manual": [
+          "Daniel runs it on one of his real Vite apps, and the agent edits the right file on the first try for at least 8 of 10 annotations."
+        ]
+      }
+    },
+    {
+      "id": "S9",
+      "kind": "feature",
+      "title": "Keep selectors, snapshots and routes clean",
+      "behaviours": [16, 17],
+      "seam": "a fixture Vite + React app",
+      "blocked_by": ["S8"],
+      "autonomy": "afk",
+      "done": {
+        "automated": [
+          "verify: annotate a fixture element and send; `poll <fixture-url>` returns a selector without `data-intervu-src` and a snapshot without overlay markup.",
+          "verify: annotate on two fixture routes and send; both annotations land in the same Session, each with its own `pageUrl`."
+        ],
+        "manual": []
+      }
+    },
+    {
+      "id": "S10",
+      "kind": "feature",
+      "title": "Sync the Conversation live across tabs",
+      "behaviours": [20, 21],
+      "seam": "a fixture Vite + React app",
+      "blocked_by": ["S6", "S7"],
+      "autonomy": "afk",
+      "done": {
+        "automated": [
+          "verify: `reply <fixture-url> \"<msg>\"` shows the message in the panel of two open tabs.",
+          "verify: a message sent from one tab appears in the other tab's panel live.",
+          "verify: Presence shows while `poll <fixture-url>` waits, and `end <fixture-url>` shows the ended state in the panel."
+        ],
+        "manual": []
+      }
+    },
+    {
+      "id": "S11",
+      "kind": "feature",
+      "title": "Survive HMR and full page reloads",
+      "behaviours": [18, 19],
+      "seam": "a fixture Vite + React app",
+      "blocked_by": ["S8"],
+      "autonomy": "afk",
+      "done": {
+        "automated": [
+          "verify: edit a fixture source file while an annotation is pending; HMR shows the change, and the Conversation, the pending annotation and the panel position are still there.",
+          "verify: reload the page with an unsent draft and a moved panel; the draft and the position are still there."
+        ],
+        "manual": []
+      }
+    },
+    {
+      "id": "S12",
+      "kind": "feature",
+      "title": "Document URL mode in the Skill",
+      "behaviours": [25],
+      "seam": "a helper that runs the CLI",
+      "blocked_by": ["S4"],
+      "autonomy": "afk",
+      "done": {
+        "automated": [
+          "verify: run `intervu setup` into a throwaway directory; the written Skill explains opening a URL-mode Session, adding `intervu()` to `vite.config.ts`, and what `source` and `pageUrl` mean."
+        ],
+        "manual": []
+      }
+    }
+  ]
+}

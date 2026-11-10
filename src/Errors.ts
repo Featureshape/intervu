@@ -133,3 +133,15 @@ export class ConflictingSetupScope extends Schema.TaggedErrorClass<ConflictingSe
   "ConflictingSetupScope",
   {},
 ) {}
+
+/**
+ * `intervu <url>` got no answer from the app at the URL: nothing listens there,
+ * or it did not respond in time. URL mode fails fast rather than opening a
+ * Session that waits for a dev server, so no Session is opened.
+ */
+export class AppUnreachable extends Schema.TaggedErrorClass<AppUnreachable>()(
+  "AppUnreachable",
+  {
+    url: Schema.String,
+  },
+) {}

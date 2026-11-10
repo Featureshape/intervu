@@ -7,8 +7,9 @@ import { AppConfig } from "./AppConfig.ts";
  * Where `intervu poll` puts each delivered DOM snapshot (ADR 0021), so the agent
  * reads one only when it needs to instead of receiving a whole page per Feedback.
  *
- * Snapshots land in `<stateDir>/snapshots/<artifact-hash>/<content-hash>.html`.
- * The content hash means identical snapshots share one file, and each artifact
+ * Snapshots land in `<stateDir>/snapshots/<handle-hash>/<content-hash>.html`,
+ * where the handle is the Session's: an artifact's realpath or an app's origin.
+ * The content hash means identical snapshots share one file, and each Session
  * keeps only its newest `KEEP` files. Both the directories and the files are
  * owner-only, because a rendered page can hold private data.
  *
@@ -27,7 +28,7 @@ export class SnapshotFiles extends Context.Service<
   SnapshotFiles,
   {
     readonly save: (
-      artifactPath: string,
+      handle: string,
       html: string,
     ) => Effect.Effect<Option.Option<string>>;
   }
@@ -60,12 +61,12 @@ export class SnapshotFiles extends Context.Service<
           yield* Effect.forEach(stale, ({ file }) => fs.remove(file));
         });
 
-      const save = (artifactPath: string, html: string) =>
+      const save = (handle: string, html: string) =>
         Effect.gen(function* () {
           const dir = path.join(
             config.stateDir,
             "snapshots",
-            shortHash(artifactPath),
+            shortHash(handle),
           );
           const file = path.join(dir, `${shortHash(html)}.html`);
           yield* fs.makeDirectory(dir, { recursive: true, mode: 0o700 });

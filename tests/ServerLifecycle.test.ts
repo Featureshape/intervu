@@ -78,6 +78,7 @@ describe("ServerLifecycle health check", () => {
           logFile: "/state/server.log",
           homeDir: Option.some("/home/tester"),
           currentDir: "/project",
+          browser: Option.none(),
         }),
       ),
       Layer.provide(BunFileSystem.layer),

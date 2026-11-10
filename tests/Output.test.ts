@@ -59,6 +59,25 @@ describe("Output.session", () => {
   });
 });
 
+describe("Output.appSession", () => {
+  it("shapes the URL-mode session view in canonical key order", () => {
+    const view = Output.appSession({
+      help: "next",
+      status: "open",
+      origin: "http://localhost:5173",
+      key: "abc",
+    });
+
+    expect(Object.keys(view)).toEqual(["key", "origin", "status", "help"]);
+    expect(view).toEqual({
+      key: "abc",
+      origin: "http://localhost:5173",
+      status: "open",
+      help: "next",
+    });
+  });
+});
+
 describe("Output.error", () => {
   it("shapes a structured error view", () => {
     const view = Output.error({
@@ -129,6 +148,61 @@ describe("Output.pollFeedback", () => {
     expect(item).toMatchObject({
       domSnapshotPath: "/state/snapshots/a/b.html",
     });
+  });
+
+  it("keeps a live app annotation's source and pageUrl after its context", () => {
+    const feedback = new Feedback({
+      message: "fix the label",
+      annotations: [
+        {
+          kind: "element",
+          selector: "#counter",
+          tag: "button",
+          text: "Clicked 0 times",
+          source: "/app/src/App.tsx:29:7",
+          pageUrl: "http://localhost:5173/settings?tab=profile",
+        },
+        {
+          kind: "text",
+          selector: "#widget",
+          tag: "span",
+          text: "Third-party widget",
+          selectedText: "widget",
+          pageUrl: "http://localhost:5173/",
+        },
+      ],
+      domSnapshot: "<html></html>",
+    });
+
+    const view = Output.pollFeedback({
+      feedback: [{ feedback, snapshotPath: Option.some("/s/a.html") }],
+      help: "next step",
+    });
+
+    const [element, text] = view.feedback[0]?.annotations ?? [];
+    expect(Object.keys(element ?? {})).toEqual([
+      "n",
+      "kind",
+      "selector",
+      "tag",
+      "text",
+      "source",
+      "pageUrl",
+    ]);
+    expect(element).toMatchObject({
+      source: "/app/src/App.tsx:29:7",
+      pageUrl: "http://localhost:5173/settings?tab=profile",
+    });
+    // No app code above the target: the key is omitted, not empty.
+    expect(Object.keys(text ?? {})).toEqual([
+      "n",
+      "kind",
+      "selector",
+      "tag",
+      "text",
+      "selectedText",
+      "pageUrl",
+    ]);
   });
 
   it("delivers the snapshot inline when it could not be saved", () => {

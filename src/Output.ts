@@ -72,9 +72,31 @@ export const session = (params: SessionView): SessionView => ({
 });
 
 /**
+ * A URL-mode Session as printed by `open <url>` (ADR 0022), in canonical key
+ * order: `key`, `origin`, `status`, `help`. `origin` is the handle every later
+ * command takes for this Session.
+ */
+export interface AppSessionView {
+  readonly key: string;
+  readonly origin: string;
+  readonly status: string;
+  readonly help: string;
+}
+
+/** Shape the URL-mode Session view, pinning key order. */
+export const appSession = (params: AppSessionView): AppSessionView => ({
+  key: params.key,
+  origin: params.origin,
+  status: params.status,
+  help: params.help,
+});
+
+/**
  * One annotation as the poll prints it: `n` is the 1-based badge number the
  * human saw, then the selector context. `selectedText` is present only on the
  * `text` kind, so the key is omitted entirely for an `element` annotation.
+ * `source` (the JSX `file:line:col`) and `pageUrl` come only from a live app in
+ * URL mode, and are likewise omitted when absent.
  */
 export interface PollAnnotationView {
   readonly n: number;
@@ -83,6 +105,8 @@ export interface PollAnnotationView {
   readonly tag: string;
   readonly text: string;
   readonly selectedText?: string;
+  readonly source?: string;
+  readonly pageUrl?: string;
 }
 
 /**
@@ -142,9 +166,16 @@ const shapeAnnotation = (
     tag: annotation.tag,
     text: annotation.text,
   };
-  return annotation.kind === "text"
-    ? { ...base, selectedText: annotation.selectedText }
-    : base;
+  return {
+    ...base,
+    ...(annotation.kind === "text"
+      ? { selectedText: annotation.selectedText }
+      : {}),
+    ...(annotation.source === undefined ? {} : { source: annotation.source }),
+    ...(annotation.pageUrl === undefined
+      ? {}
+      : { pageUrl: annotation.pageUrl }),
+  };
 };
 
 const shapeFeedback = ({

@@ -1,4 +1,5 @@
-import { finder } from "@medv/finder";
+import { attr, finder } from "@medv/finder";
+import { sourceAttribute } from "../vite/jsxSource.ts";
 
 /**
  * The `@medv/finder` wrapper: a stable, unique CSS selector for an element
@@ -7,10 +8,17 @@ import { finder } from "@medv/finder";
  * the unit tests never re-test it. finder throws when it cannot produce a
  * selector (e.g. a detached node); we fall back to the bare tag name rather than
  * propagate, mirroring the chrome controller's graceful-degradation idiom.
+ *
+ * finder's own attribute filter stays, minus the `intervu/vite` plugin's JSX
+ * source stamp. Its path-like value fails finder's current word-like check
+ * anyway; the explicit exclusion keeps it out of selectors whatever finder's
+ * defaults become, as the stamp exists only in dev and moves with every edit.
  */
 export const cssSelectorFor = (element: Element): string => {
   try {
-    return finder(element);
+    return finder(element, {
+      attr: (name, value) => name !== sourceAttribute && attr(name, value),
+    });
   } catch {
     return element.tagName.toLowerCase();
   }

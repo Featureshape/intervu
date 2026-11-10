@@ -29,7 +29,7 @@ import {
   PollResponse,
   ReplyResponse,
 } from "./Protocol.ts";
-import { Session } from "./Session.ts";
+import { Session, type SessionKind } from "./Session.ts";
 
 type EnsureError =
   | ServerStartTimeout
@@ -127,6 +127,7 @@ export class ServerLifecycle extends Context.Service<
     >;
     readonly openSession: (
       path: string,
+      kind: SessionKind,
     ) => Effect.Effect<
       Session,
       HttpClientError.HttpClientError | Schema.SchemaError
@@ -318,10 +319,10 @@ export class ServerLifecycle extends Context.Service<
         ),
       );
 
-      const openSession = (path: string) =>
+      const openSession = (path: string, kind: SessionKind) =>
         Effect.gen(function* () {
           const request = HttpClientRequest.post(`${baseUrl}/sessions`).pipe(
-            HttpClientRequest.bodyJsonUnsafe({ path }),
+            HttpClientRequest.bodyJsonUnsafe({ path, kind }),
           );
           const response = yield* client.execute(request);
           return yield* HttpClientResponse.schemaBodyJson(Session)(response);

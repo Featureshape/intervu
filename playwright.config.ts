@@ -1,7 +1,32 @@
-import * as os from "node:os";
-import * as path from "node:path";
 import process from "node:process";
 import { defineConfig, devices } from "@playwright/test";
+import {
+  commandsAppPort,
+  commandsAppUrl,
+  conversationAppPort,
+  conversationAppUrl,
+  daemonPort,
+  daemonStateDir,
+  endableAppPort,
+  endableAppUrl,
+  fixtureAppDir,
+  fixtureAppPort,
+  fixtureAppUrl,
+  noDaemonAppPort,
+  noDaemonAppUrl,
+  noPluginAppPort,
+  noPluginAppUrl,
+  panelAppPort,
+  panelAppUrl,
+  previousViteAppDir,
+  previousViteAppPort,
+  previousViteAppUrl,
+  previousViteBin,
+  reloadAppPort,
+  reloadAppUrl,
+  unusedDaemonPort,
+  viteBin,
+} from "./e2e/support.ts";
 
 /**
  * The intervu E2E harness (issue #5 slice 3). Playwright boots the real daemon
@@ -9,11 +34,46 @@ import { defineConfig, devices } from "@playwright/test";
  * directory, then the specs drive the chrome, the sandboxed opaque-origin
  * artifact iframe, and the postMessage Bridge end to end. Kept out of the fast
  * `bun run test` (vitest) loop - run with `bun run test:e2e`.
+ *
+ * URL mode is proven against the fixture Vite + React app (`e2e/fixtures/app`),
+ * served on Node with the `intervu/vite` plugin loaded from source: five times
+ * wired to the harness daemon (four instances for specs that end their Session
+ * or count its Conversation), once to a port no daemon listens on, and once
+ * without the plugin at all. The previous Vite major serves the same app from
+ * its own workspace
+ * (`e2e/fixtures/app-previous-vite`).
  */
 
-const PORT = 51990;
-const baseURL = `http://127.0.0.1:${PORT}`;
-const stateDir = path.join(os.tmpdir(), "intervu-e2e-state");
+const baseURL = `http://127.0.0.1:${daemonPort}`;
+
+/**
+ * Serve the fixture app with the Vite CLI `bin` from the config in `dir` (or
+ * the file `config` there), on `port`, with `INTERVU_PORT` set to `daemonPort`
+ * for its plugin, if the config loads one. `FIXTURE_APP_PORT` names `port` for
+ * a config that keys its dependency cache by instance.
+ */
+const fixtureApp = ({
+  bin,
+  dir,
+  config,
+  port,
+  url,
+  daemonPort,
+}: {
+  readonly bin: string;
+  readonly dir: string;
+  readonly config?: string;
+  readonly port: number;
+  readonly url: string;
+  readonly daemonPort: number;
+}) => ({
+  command: `node "${bin}"${config === undefined ? "" : ` --config ${config}`} --port ${port} --strictPort`,
+  cwd: dir,
+  url,
+  reuseExistingServer: !process.env.CI,
+  timeout: 120_000,
+  env: { INTERVU_PORT: String(daemonPort), FIXTURE_APP_PORT: String(port) },
+});
 
 export default defineConfig({
   testDir: "./e2e",
@@ -27,14 +87,48 @@ export default defineConfig({
     trace: "on-first-retry",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
-  webServer: {
-    command: "bun src/main.ts server",
-    url: `${baseURL}/health`,
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-    env: {
-      INTERVU_PORT: String(PORT),
-      INTERVU_STATE_DIR: stateDir,
+  webServer: [
+    {
+      command: "bun src/main.ts server",
+      url: `${baseURL}/health`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+      env: {
+        INTERVU_PORT: String(daemonPort),
+        INTERVU_STATE_DIR: daemonStateDir,
+      },
     },
-  },
+    ...[
+      { port: fixtureAppPort, url: fixtureAppUrl },
+      { port: endableAppPort, url: endableAppUrl },
+      { port: panelAppPort, url: panelAppUrl },
+      { port: conversationAppPort, url: conversationAppUrl },
+      { port: reloadAppPort, url: reloadAppUrl },
+      { port: commandsAppPort, url: commandsAppUrl },
+    ].map(({ port, url }) =>
+      fixtureApp({ bin: viteBin, dir: fixtureAppDir, port, url, daemonPort }),
+    ),
+    fixtureApp({
+      bin: viteBin,
+      dir: fixtureAppDir,
+      port: noDaemonAppPort,
+      url: noDaemonAppUrl,
+      daemonPort: unusedDaemonPort,
+    }),
+    fixtureApp({
+      bin: viteBin,
+      dir: fixtureAppDir,
+      config: "vite.no-plugin.config.ts",
+      port: noPluginAppPort,
+      url: noPluginAppUrl,
+      daemonPort,
+    }),
+    fixtureApp({
+      bin: previousViteBin,
+      dir: previousViteAppDir,
+      port: previousViteAppPort,
+      url: previousViteAppUrl,
+      daemonPort: unusedDaemonPort,
+    }),
+  ],
 });

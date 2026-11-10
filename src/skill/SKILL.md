@@ -1,18 +1,21 @@
 ---
 name: intervu
-description: Drive a collaborative human review of an HTML artifact you generated - open a review, long-poll for the human's annotated feedback, edit the file so the browser live-reloads, and reply while you keep listening. Use when you have produced an HTML artifact and want a human to review it before you continue.
+description: Drive a collaborative human review of an HTML artifact you generated or of a running Vite + React app - open a review, long-poll for the human's annotated feedback, edit the file or the app's source so the browser live-reloads, and reply while you keep listening. Use when you have produced an HTML artifact, or changed an app running on localhost, and want a human to review it before you continue.
 ---
 
 # intervu
 
-intervu turns an HTML artifact you generated into a collaborative browser review surface.
-You open a review for the file, the human annotates the rendered page in their browser, and you long-poll for that feedback and live-edit the file in response.
+intervu turns an HTML artifact you generated, or a Vite + React app running on `localhost`, into a collaborative browser review surface.
+You open a review for the file or the app's URL, the human annotates the rendered page in their browser, and you long-poll for that feedback and live-edit the file or the app's source in response.
 Every command prints content-first TOON with a `help` line telling you the next step.
 
 ## When to reach for intervu
 
 Reach for intervu when you have produced an HTML artifact - a page, a prototype, a report - and you want a human to review it before you move on, or when you are about to build one with a human waiting to see it.
 Open a review instead of guessing whether the result is right, or asking the human to describe what they see in prose.
+
+Reach for it too when you are working on a Vite + React app the human has running on `localhost` and they want to point at what is wrong in the real app.
+That is URL mode, described in [Reviewing a running app](#reviewing-a-running-app-url-mode) below.
 
 ## The loop
 
@@ -38,6 +41,64 @@ Open a review instead of guessing whether the result is right, or asking the hum
    When the review is finished, run `intervu end <file>` to end the Session.
    The human can also end it from the browser; your current or next poll then returns `ended`.
    Ending is reversible - re-running `intervu <file>` reopens the path to a live review.
+
+## Reviewing a running app (URL mode)
+
+URL mode reviews a Vite + React app in the tab the human already has open, instead of an HTML file in intervu's own page.
+The loop is the same; only the handle changes.
+
+### Add the plugin once
+
+URL mode needs the `intervu/vite` plugin in the app's dev server.
+`intervu setup` does not touch the app's build config, so you add it yourself.
+In `vite.config.ts` (or `vite.config.js`), import `intervu` and add `intervu()` to `plugins`:
+
+```ts
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
+import { intervu } from "intervu/vite";
+
+export default defineConfig({
+  plugins: [react(), intervu()],
+});
+```
+
+Then ask the human to restart the dev server, because Vite reads its config only at startup.
+The plugin runs only under `vite dev` and never enters a production build.
+With the plugin in place and no review open, the app shows a small "intervu: no agent" badge, which tells you and the human that it is wired.
+
+### Open a review on the app's URL
+
+1. **Open or resume the Session.**
+   Run `intervu http://localhost:5173` with the URL the dev server prints.
+   The human must already be running the dev server; intervu attaches to it and never starts it.
+   The Session is keyed by the URL's origin, so running it again from any route of the same app resumes the same Session.
+   No browser tab opens: within a couple of seconds intervu's floating panel replaces the badge in every tab the human has open on that origin.
+   Pass `--open` if the human has no tab open yet.
+2. **Use the origin as the handle.**
+   The output's `origin` field, such as `http://localhost:5173`, is what every later command takes: `intervu poll http://localhost:5173`, `intervu reply http://localhost:5173 "<message>"` and `intervu end http://localhost:5173`.
+3. **Edit the app's source.**
+   Vite's hot reload updates the human's view, and the panel keeps the Conversation and any unsent annotations.
+
+Two outcomes of `intervu <url>` need action from you:
+
+- **`AppUnreachable`** - nothing answered at the URL, and no Session was opened.
+  Ask the human to start the dev server, or check the port, then run the command again.
+- **A help line saying the Vite plugin is missing** - the Session is open, but the page cannot show the panel.
+  Add `intervu()` as shown above and ask the human to restart the dev server; the Session stays open meanwhile.
+
+### What `source` and `pageUrl` mean
+
+In URL mode each annotation in a Feedback carries two more fields:
+
+- **`source`** - the `file:line:col` of the JSX element in the app's own code that rendered what the human clicked, such as `/repo/src/App.tsx:42:7`.
+  If the click landed inside a component from `node_modules`, `source` names the nearest enclosing element written in the app's code, so it always points at a file you can edit.
+  Open that file at that line first; it is usually the place to change.
+  It can be missing when no app element encloses the click, so fall back to the selector, text and snapshot then.
+- **`pageUrl`** - the full URL of the page the human was on when they made the annotation, such as `http://localhost:5173/settings?tab=profile`.
+  One Session covers every route of the app, so `pageUrl` tells you which route, and which query state, the annotation is about.
+
+The `selector`, `tag`, `text` and DOM snapshot mean the same as for an artifact, against the live page the human annotated.
 
 ## Keeping the human waiting less
 

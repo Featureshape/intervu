@@ -1,0 +1,9 @@
+{
+  "name": "intervu-fixture-app-previous-vite",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5",
+    "vite": "^7"
+  }
+}

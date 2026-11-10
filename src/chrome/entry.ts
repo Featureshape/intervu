@@ -1,4 +1,12 @@
 import { onMessageFromFrame, postToFrame } from "../sdk/bridge.ts";
+import { annotationToWire } from "../sdk/feedbackWire.ts";
+import {
+  bubbleText,
+  type ConversationEntry,
+  followLiveFrames,
+  type Presence,
+  roleLabel,
+} from "../sdk/liveFrame.ts";
 import type { AnnotateMode, Annotation } from "../sdk/protocol.ts";
 
 /**
@@ -238,23 +246,6 @@ const createPending = (iframe: HTMLIFrameElement): Pending => {
   };
 };
 
-/** The id-less wire shape of an annotation (Protocol mirror): queue order is identity. */
-const toWire = (annotation: Annotation) =>
-  annotation.kind === "text"
-    ? {
-        kind: "text",
-        selector: annotation.selector,
-        tag: annotation.tag,
-        text: annotation.text,
-        selectedText: annotation.selectedText,
-      }
-    : {
-        kind: "element",
-        selector: annotation.selector,
-        tag: annotation.tag,
-        text: annotation.text,
-      };
-
 /**
  * Capture the live DOM the human annotated (ADR 0008): post `snapshot-request`
  * down the Bridge and resolve with the `snapshot-result` the SDK returns. The
@@ -295,7 +286,7 @@ const postFeedback = (
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       message,
-      annotations: annotations.map(toWire),
+      annotations: annotations.map(annotationToWire),
       domSnapshot,
     }),
   }).then((response) => response.ok);
@@ -323,7 +314,7 @@ const postEnd = (key: string, rider: EndRider | null): Promise<boolean> =>
         : {
             feedback: {
               message: rider.message,
-              annotations: rider.annotations.map(toWire),
+              annotations: rider.annotations.map(annotationToWire),
               domSnapshot: rider.domSnapshot,
             },
           },
@@ -460,16 +451,11 @@ const createComposer = (
 };
 
 /** The Presence dot's color per state; static literals for the Tailwind scan. */
-const PRESENCE_DOTS = {
+const PRESENCE_DOTS: Record<Presence, string> = {
   idle: "bg-zinc-400",
   listening: "bg-emerald-500",
   working: "bg-amber-500",
-} as const;
-
-type Presence = keyof typeof PRESENCE_DOTS;
-
-const isPresence = (value: unknown): value is Presence =>
-  value === "idle" || value === "listening" || value === "working";
+};
 
 /**
  * Drive the top-bar Presence indicator (ADR 0010): swap the dot's color class and
@@ -490,27 +476,6 @@ const wirePresence = (): ((presence: Presence) => void) => {
   };
 };
 
-/** One Conversation entry as the chrome receives it over the SSE stream. */
-interface ConversationEntry {
-  readonly seq: number;
-  readonly role: "human" | "agent";
-  readonly text: string;
-  readonly annotationCount: number;
-}
-
-const isConversationEntry = (value: unknown): value is ConversationEntry =>
-  typeof value === "object" &&
-  value !== null &&
-  "seq" in value &&
-  typeof value.seq === "number" &&
-  "role" in value &&
-  (value.role === "human" || value.role === "agent") &&
-  "text" in value &&
-  typeof value.text === "string" &&
-  "annotationCount" in value &&
-  typeof value.annotationCount === "number";
-
-const ROLE_LABEL = { human: "Human", agent: "Agent" } as const;
 const BUBBLE_BASE =
   "max-w-[85%] rounded-lg px-2.5 py-1.5 text-[13px] leading-relaxed";
 const BUBBLE_ROLE = {
@@ -547,20 +512,16 @@ const createConversation = (): ((entry: ConversationEntry) => void) => {
     const label = document.createElement("span");
     label.className =
       "mb-0.5 block text-[10px] font-semibold uppercase tracking-[0.06em] opacity-70";
-    label.textContent = ROLE_LABEL[entry.role];
+    label.textContent = roleLabel[entry.role];
     bubble.append(label);
 
     const body = document.createElement("p");
     body.className = "m-0 whitespace-pre-wrap break-words";
-    const trimmed = entry.text.trim();
-    if (trimmed.length === 0 && entry.annotationCount > 0) {
+    const { text, countOnly } = bubbleText(entry);
+    if (countOnly) {
       body.classList.add("italic", "opacity-80");
-      body.textContent = `${entry.annotationCount} annotation${
-        entry.annotationCount === 1 ? "" : "s"
-      }`;
-    } else {
-      body.textContent = entry.text;
     }
+    body.textContent = text;
     bubble.append(body);
 
     container.append(bubble);
@@ -676,59 +637,6 @@ const wireEndSession = (config: ChromeConfig): void => {
   });
 };
 
-/**
- * Open the one server-to-browser SSE channel (ADR 0010) and fan its frames out to
- * the indicator, the thread, the iframe reload, and the ended state. `EventSource`
- * reconnects transparently and resumes the thread from `Last-Event-ID`, so a
- * dropped connection never duplicates a bubble. On a `SessionEnded` frame the
- * chrome applies the ended state and closes its own `EventSource`, which tears
- * down the server stream via the existing client-disconnect path (ADR 0011).
- * Every frame is untrusted JSON, validated before it touches the DOM.
- */
-const createLiveChannel = (
-  config: ChromeConfig,
-  handlers: {
-    readonly setPresence: (presence: Presence) => void;
-    readonly appendConversation: (entry: ConversationEntry) => void;
-    readonly reload: (version: string) => void;
-    readonly ended: () => void;
-  },
-): void => {
-  const source = new EventSource(`/s/${config.key}/events`);
-  source.addEventListener("message", (event) => {
-    let data: unknown;
-    try {
-      data = JSON.parse(event.data);
-    } catch {
-      return;
-    }
-    if (typeof data !== "object" || data === null || !("_tag" in data)) {
-      return;
-    }
-    if (
-      data._tag === "PresenceChanged" &&
-      "presence" in data &&
-      isPresence(data.presence)
-    ) {
-      handlers.setPresence(data.presence);
-    } else if (
-      data._tag === "ConversationAppended" &&
-      isConversationEntry(data)
-    ) {
-      handlers.appendConversation(data);
-    } else if (
-      data._tag === "ArtifactReloaded" &&
-      "version" in data &&
-      typeof data.version === "string"
-    ) {
-      handlers.reload(data.version);
-    } else if (data._tag === "SessionEnded") {
-      handlers.ended();
-      source.close();
-    }
-  });
-};
-
 const main = (): void => {
   const config = readConfig();
   if (config === null) {
@@ -745,7 +653,9 @@ const main = (): void => {
     const pending = createPending(iframe);
     createComposer(iframe, config, pending);
     const reload = wireLiveReload(iframe, config);
-    createLiveChannel(config, {
+    // The one server-to-browser SSE channel (ADR 0010), fanned out to the
+    // indicator, the thread, the iframe reload and the ended state.
+    followLiveFrames(`/s/${config.key}/events`, {
       setPresence: wirePresence(),
       appendConversation: createConversation(),
       reload,
