@@ -15,6 +15,13 @@ import {
   sessionPath,
 } from "../vite/relayPaths.ts";
 import { openSessionKeyIn } from "../vite/sessionAnswer.ts";
+import {
+  readDraft,
+  readPosition,
+  type TabStorage,
+  writeDraft,
+  writePosition,
+} from "./tabMemory.ts";
 
 /**
  * The in-page overlay for URL mode: the `intervu/vite` plugin injects this
@@ -41,6 +48,11 @@ import { openSessionKeyIn } from "../vite/sessionAnswer.ts";
  * The panel reads the Session's SSE stream through the relay too, so every tab
  * open on the origin renders the same Conversation, the agent's Presence and the
  * ended state from the daemon, as the artifact chrome does (ADR 0010, 0011).
+ *
+ * Vite's HMR swaps the app's modules under the panel without touching it, so
+ * the Conversation, the pending annotations and the panel's place survive an
+ * edit. A full page reload starts the panel afresh: the unsent message and the
+ * place the panel was dragged to come back from the tab's `sessionStorage`.
  */
 
 const STYLES = `
@@ -393,6 +405,16 @@ const STYLES = `
 /** The relay route the overlay asks whether a Session is open for its origin. */
 const sessionLookupPath = `${relayPrefix}${sessionPath}`;
 
+/**
+ * The tab's `sessionStorage`, read on each use: a browser that refuses storage
+ * throws from the access itself, and `./tabMemory.ts` treats that as no memory.
+ */
+const tabStorage: TabStorage = {
+  getItem: (key) => window.sessionStorage.getItem(key),
+  setItem: (key, value) => window.sessionStorage.setItem(key, value),
+  removeItem: (key) => window.sessionStorage.removeItem(key),
+};
+
 /** How often the dormant badge asks whether a Session has opened. */
 const sessionLookupIntervalMs = 1_000;
 
@@ -509,6 +531,8 @@ const clamp = (value: number, max: number): number =>
  * Let the human drag the panel by its header. The host moves, not the panel:
  * from the first drag on it is placed by `left`/`top` instead of the corner it
  * starts in, and kept inside the viewport, including when the window shrinks.
+ * Where a drag leaves it is kept for the tab, so the panel starts there after a
+ * reload.
  */
 const makeDraggable = (
   host: HTMLElement,
@@ -544,6 +568,10 @@ const makeDraggable = (
       placeAt(moved.clientX - offsetX, moved.clientY - offsetY);
     const stop = (): void => {
       panel.removeAttribute("data-dragging");
+      if (placed) {
+        const box = host.getBoundingClientRect();
+        writePosition(tabStorage, { left: box.left, top: box.top });
+      }
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", stop);
       handle.removeEventListener("pointercancel", stop);
@@ -559,6 +587,11 @@ const makeDraggable = (
       placeAt(box.left, box.top);
     }
   });
+
+  const stored = readPosition(tabStorage);
+  if (stored !== null) {
+    placeAt(stored.left, stored.top);
+  }
 };
 
 /**
@@ -697,6 +730,7 @@ const reviewControls = (
   input.placeholder = "Message to the agent...";
   input.setAttribute("aria-label", "Message to the agent");
   input.setAttribute("data-intervu-composer-input", "");
+  input.value = readDraft(tabStorage, key);
 
   const toggle = document.createElement("button");
   toggle.type = "button";
@@ -790,11 +824,15 @@ const reviewControls = (
       if (input.value === message) {
         input.value = "";
       }
+      writeDraft(tabStorage, key, input.value);
       send.textContent = sendLabel;
       sync();
     });
   });
-  input.addEventListener("input", sync);
+  input.addEventListener("input", () => {
+    writeDraft(tabStorage, key, input.value);
+    sync();
+  });
   sync();
 
   const actions = document.createElement("div");

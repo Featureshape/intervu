@@ -59,6 +59,14 @@ export const panelAppUrl = `http://localhost:${panelAppPort}`;
 export const conversationAppPort = 51999;
 export const conversationAppUrl = `http://localhost:${conversationAppPort}`;
 
+/**
+ * The same fixture app wired to the harness daemon, for the HMR and reload
+ * spec: it counts the Conversation and the pending annotations across an edit
+ * and a reload, so no other spec may send to that Session.
+ */
+export const reloadAppPort = 52000;
+export const reloadAppUrl = `http://localhost:${reloadAppPort}`;
+
 /** A port no app listens on, for `intervu <url>` to find nothing at. */
 export const unreachableAppUrl = "http://localhost:51996";
 

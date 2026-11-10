@@ -17,6 +17,7 @@
     "src/sdk/**/*.ts",
     "src/chrome/**/*.ts",
     "src/overlay/**/*.ts",
-    "tests/sdk/**/*.ts"
+    "tests/sdk/**/*.ts",
+    "tests/overlay/**/*.ts"
   ]
 }

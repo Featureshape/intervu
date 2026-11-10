@@ -1,6 +1,7 @@
 import { FixtureWidget } from "fixture-widget";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import { Notice } from "./Notice.tsx";
 
 /**
  * A full-viewport layer at the highest `z-index` an app can set, portalled to
@@ -36,6 +37,7 @@ export const App = () => {
   return (
     <main>
       <h1 id="headline">Fixture app</h1>
+      <Notice />
       <nav>
         <a
           id="nav-about"
