@@ -54,19 +54,31 @@ export interface CliRun {
   readonly output: JsonValue;
 }
 
+/** Where a CLI run starts and what it adds to the inherited environment. */
+export interface CliOptions {
+  /** The working directory, which `setup --project` writes into; the repo root
+   * unless given. */
+  readonly cwd?: string;
+  /** Variables set on top of the inherited environment, such as a `PATH` with a
+   * stub `intervu` on it. The harness's own `INTERVU_*` variables still win. */
+  readonly env?: Readonly<Record<string, string>>;
+}
+
 /** Run `intervu <args>` to completion with `browser` standing in for the OS's. */
 export const runCli = (
   args: readonly string[],
   browser: BrowserRecorder,
+  options: CliOptions = {},
 ): Promise<CliRun> =>
   new Promise((resolve) => {
     execFile(
       "bun",
-      ["src/main.ts", ...args],
+      [nodePath.join(repoRoot, "src", "main.ts"), ...args],
       {
-        cwd: repoRoot,
+        cwd: options.cwd ?? repoRoot,
         env: {
           ...process.env,
+          ...options.env,
           INTERVU_PORT: String(daemonPort),
           INTERVU_STATE_DIR: daemonStateDir,
           INTERVU_BROWSER: browser.command,
