@@ -130,7 +130,10 @@ export const guardRequest = (input: GuardInput): GuardRejection | null => {
 const ownSessionRoutes: readonly {
   readonly method: string;
   readonly path: RegExp;
-}[] = [{ method: "POST", path: /^\/s\/([0-9a-f]{16})\/feedback$/ }];
+}[] = [
+  { method: "POST", path: /^\/s\/([0-9a-f]{16})\/feedback$/ },
+  { method: "GET", path: /^\/s\/([0-9a-f]{16})\/events$/ },
+];
 
 /** Whether the page may reach `path` on the daemon with `method`. */
 export const isRelayedRoute = (method: string, path: string): boolean =>

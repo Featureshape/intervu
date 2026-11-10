@@ -128,10 +128,18 @@ describe("ownSessionRouteKey", () => {
     );
   });
 
+  it("names the Session key of its event stream", () => {
+    expect(ownSessionRouteKey("GET", "/s/0123456789abcdef/events")).toBe(
+      "0123456789abcdef",
+    );
+  });
+
   it("is null for any other method, path or key shape", () => {
     expect(
       ownSessionRouteKey("GET", "/s/0123456789abcdef/feedback"),
     ).toBeNull();
+    expect(ownSessionRouteKey("POST", "/s/0123456789abcdef/events")).toBeNull();
+    expect(ownSessionRouteKey("GET", "/s/not-a-key/events")).toBeNull();
     expect(ownSessionRouteKey("POST", "/s/0123456789abcdef/end")).toBeNull();
     expect(ownSessionRouteKey("POST", "/s/not-a-key/feedback")).toBeNull();
     expect(ownSessionRouteKey("POST", "/health")).toBeNull();

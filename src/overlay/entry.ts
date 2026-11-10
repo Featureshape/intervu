@@ -1,5 +1,12 @@
 import { createAnnotator } from "../sdk/annotator.ts";
 import { annotationToWire } from "../sdk/feedbackWire.ts";
+import {
+  bubbleText,
+  type ConversationEntry,
+  followLiveFrames,
+  type Presence,
+  roleLabel,
+} from "../sdk/liveFrame.ts";
 import type { Annotation } from "../sdk/protocol.ts";
 import { sourceAttribute } from "../vite/jsxSource.ts";
 import {
@@ -30,6 +37,10 @@ import { openSessionKeyIn } from "../vite/sessionAnswer.ts";
  * nearest element the app's own code rendered, read from the plugin's
  * `data-intervu-src` stamp. Send posts the message, the pending annotations and
  * a DOM snapshot without intervu's own markup to the Session through the relay.
+ *
+ * The panel reads the Session's SSE stream through the relay too, so every tab
+ * open on the origin renders the same Conversation, the agent's Presence and the
+ * ended state from the daemon, as the artifact chrome does (ADR 0010, 0011).
  */
 
 const STYLES = `
@@ -141,7 +152,28 @@ const STYLES = `
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .live { background: #22c55e; }
+  .presence {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    color: #6b6b76;
+    font-size: 12px;
+  }
+  .presence[hidden] { display: none; }
+  .dot[data-presence="idle"] { background: #a1a1aa; }
+  .dot[data-presence="listening"] { background: #10b981; }
+  .dot[data-presence="working"] { background: #f59e0b; }
+  .ended-pill {
+    flex: none;
+    padding: 2px 8px;
+    border-radius: 9px;
+    background: #f2f2f4;
+    color: #6b6b76;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .ended-pill[hidden] { display: none; }
   .collapse {
     display: inline-flex;
     flex: none;
@@ -183,6 +215,48 @@ const STYLES = `
   }
   .empty[hidden] { display: none; }
   .section + .section { margin-top: 16px; }
+  .bubbles {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .bubbles:empty { display: none; }
+  .bubble {
+    max-width: 85%;
+    padding: 6px 10px;
+    box-sizing: border-box;
+    border-radius: 8px;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .bubble[data-role="human"] {
+    align-self: flex-end;
+    background: #1a1a1f;
+    color: #ffffff;
+  }
+  .bubble[data-role="agent"] {
+    align-self: flex-start;
+    background: #f2f2f4;
+    color: #1a1a1f;
+  }
+  .role {
+    display: block;
+    margin-bottom: 2px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    opacity: 0.7;
+  }
+  .said {
+    margin: 0;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+  .said[data-count-only] {
+    font-style: italic;
+    opacity: 0.8;
+  }
   .pending {
     display: flex;
     flex-direction: column;
@@ -256,6 +330,18 @@ const STYLES = `
     background: #ffffff;
   }
   .composer[hidden] { display: none; }
+  .ended-note {
+    flex: none;
+    margin: 0;
+    padding: 12px;
+    border-top: 1px solid #e2e2e6;
+    background: #ffffff;
+    color: #6b6b76;
+    font-size: 13px;
+    font-style: italic;
+    line-height: 1.6;
+  }
+  .ended-note[hidden] { display: none; }
   .input {
     width: 100%;
     box-sizing: border-box;
@@ -589,7 +675,11 @@ const sendLabel = "Send to Agent";
 const reviewControls = (
   host: HTMLElement,
   key: string,
-): { readonly pending: HTMLElement; readonly composer: HTMLElement } => {
+): {
+  readonly pending: HTMLElement;
+  readonly composer: HTMLElement;
+  readonly freeze: () => void;
+} => {
   const items = new Map<string, AppAnnotation>();
   let nextId = 0;
 
@@ -717,10 +807,74 @@ const reviewControls = (
   composer.setAttribute("data-intervu-composer", "");
   composer.append(input, actions);
 
+  // The Session ended: no more annotations or sends, and the app takes its
+  // clicks back.
+  const freeze = (): void => {
+    annotator.setMode("off");
+    toggle.setAttribute("aria-pressed", "false");
+    toggle.disabled = true;
+    send.disabled = true;
+  };
+
   return {
     pending: section("Pending annotations", empty, list),
     composer,
+    freeze,
   };
+};
+
+/**
+ * The Conversation: one bubble per entry, the human's on the right and the
+ * agent's on the left, keyed by `seq` so the replay a reconnect sends never
+ * doubles a bubble. Text goes in with `textContent` only, so a message can never
+ * inject markup into the app's page.
+ */
+const conversationView = (
+  scroller: HTMLElement,
+): {
+  readonly bubbles: HTMLElement;
+  readonly empty: HTMLElement;
+  readonly append: (entry: ConversationEntry) => void;
+} => {
+  const seen = new Set<number>();
+  const bubbles = document.createElement("div");
+  bubbles.className = "bubbles";
+  bubbles.setAttribute("data-intervu-conversation", "");
+
+  const empty = document.createElement("p");
+  empty.className = "empty";
+  empty.setAttribute("data-intervu-conversation-empty", "");
+  empty.textContent =
+    "No messages yet. Your feedback and the agent's replies will appear here.";
+
+  const append = (entry: ConversationEntry): void => {
+    if (seen.has(entry.seq)) {
+      return;
+    }
+    seen.add(entry.seq);
+
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.setAttribute("data-role", entry.role);
+    bubble.setAttribute("data-intervu-seq", String(entry.seq));
+
+    const role = document.createElement("span");
+    role.className = "role";
+    role.textContent = roleLabel[entry.role];
+
+    const said = document.createElement("p");
+    said.className = "said";
+    const { text, countOnly } = bubbleText(entry);
+    said.toggleAttribute("data-count-only", countOnly);
+    said.textContent = text;
+
+    bubble.append(role, said);
+    bubbles.append(bubble);
+    empty.hidden = true;
+    scroller.scrollTop = scroller.scrollHeight;
+  };
+
+  return { bubbles, empty, append };
 };
 
 /** The floating panel shown while a Session is open for the origin. */
@@ -740,10 +894,6 @@ const renderPanel = (
   header.className = "header";
   header.setAttribute("data-intervu-panel-handle", "");
 
-  const dot = document.createElement("span");
-  dot.className = "dot live";
-  dot.setAttribute("aria-hidden", "true");
-
   const brand = document.createElement("span");
   brand.className = "brand";
   brand.textContent = "intervu";
@@ -753,23 +903,57 @@ const renderPanel = (
   origin.textContent = window.location.host;
   origin.title = window.location.origin;
 
+  const presence = document.createElement("span");
+  presence.className = "presence";
+  presence.title = "agent presence";
+  presence.setAttribute("data-intervu-presence", "");
+  const presenceDot = document.createElement("span");
+  presenceDot.className = "dot";
+  presenceDot.setAttribute("aria-hidden", "true");
+  const presenceLabel = document.createElement("span");
+  presenceLabel.setAttribute("data-intervu-presence-label", "");
+  presence.append(presenceDot, presenceLabel);
+  const setPresence = (state: Presence): void => {
+    presenceDot.setAttribute("data-presence", state);
+    presenceLabel.textContent = state;
+  };
+  setPresence("idle");
+
+  const endedPill = document.createElement("span");
+  endedPill.className = "ended-pill";
+  endedPill.hidden = true;
+  endedPill.setAttribute("data-intervu-ended-pill", "");
+  endedPill.textContent = "Ended";
+
   const body = document.createElement("div");
   body.className = "body";
   body.id = "intervu-panel-body";
   body.setAttribute("data-intervu-panel-body", "");
 
-  const { pending, composer } = reviewControls(host, key);
+  const { pending, composer, freeze } = reviewControls(host, key);
+
+  const endedNote = document.createElement("p");
+  endedNote.className = "ended-note";
+  endedNote.id = "intervu-panel-ended-note";
+  endedNote.hidden = true;
+  endedNote.setAttribute("data-intervu-ended-note", "");
+  endedNote.textContent = "This review has ended.";
 
   const collapse = document.createElement("button");
   collapse.type = "button";
   collapse.className = "collapse";
   collapse.setAttribute("data-intervu-collapse", "");
-  collapse.setAttribute("aria-controls", `${body.id} ${composer.id}`);
+  collapse.setAttribute(
+    "aria-controls",
+    `${body.id} ${composer.id} ${endedNote.id}`,
+  );
   collapse.append(chevron());
 
+  let ended = false;
   const setExpanded = (expanded: boolean): void => {
     body.hidden = !expanded;
-    composer.hidden = !expanded;
+    composer.hidden = !expanded || ended;
+    endedNote.hidden = !expanded || !ended;
     panel.toggleAttribute("data-collapsed", !expanded);
     collapse.setAttribute("aria-expanded", String(expanded));
     collapse.setAttribute(
@@ -780,17 +964,31 @@ const renderPanel = (
   collapse.addEventListener("click", () => setExpanded(body.hidden));
   setExpanded(true);
 
-  header.append(dot, brand, origin, collapse);
+  header.append(brand, origin, presence, endedPill, collapse);
 
-  const empty = document.createElement("p");
-  empty.className = "empty";
-  empty.textContent =
-    "No messages yet. Your feedback and the agent's replies will appear here.";
-
-  body.append(section("Conversation", empty), pending);
-  panel.append(header, body, composer);
+  const conversation = conversationView(body);
+  body.append(
+    section("Conversation", conversation.empty, conversation.bubbles),
+    pending,
+  );
+  panel.append(header, body, composer, endedNote);
   root.append(panel);
   makeDraggable(host, panel, header);
+
+  // The Session's SSE stream, through the relay. Vite's HMR reloads the app,
+  // so the daemon sends it no artifact version.
+  followLiveFrames(`${relayPrefix}/s/${key}/events`, {
+    setPresence,
+    appendConversation: conversation.append,
+    reload: () => {},
+    ended: () => {
+      ended = true;
+      presence.hidden = true;
+      endedPill.hidden = false;
+      freeze();
+      setExpanded(!body.hidden);
+    },
+  });
 };
 
 /**

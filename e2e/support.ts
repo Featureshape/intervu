@@ -51,6 +51,14 @@ export const endableAppUrl = `http://localhost:${endableAppPort}`;
 export const panelAppPort = 51998;
 export const panelAppUrl = `http://localhost:${panelAppPort}`;
 
+/**
+ * The same fixture app wired to the harness daemon, for the live-panel spec:
+ * it ends this origin's Session to watch the panel show the ended state, so no
+ * other spec may hold that Session open.
+ */
+export const conversationAppPort = 51999;
+export const conversationAppUrl = `http://localhost:${conversationAppPort}`;
+
 /** A port no app listens on, for `intervu <url>` to find nothing at. */
 export const unreachableAppUrl = "http://localhost:51996";
 

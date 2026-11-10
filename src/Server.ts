@@ -536,7 +536,9 @@ const SSE_PING_INTERVAL = Duration.seconds(20);
  * scope (`Stream.unwrap` manages it), released when `BunHttpServer` interrupts
  * the handler on client disconnect - the same abort wiring as the poll (ADR
  * 0009). The handler's context is captured and re-provided to the body, which the
- * server runs after the handler returns.
+ * server runs after the handler returns. An `app` Session's in-page panel reads
+ * the same stream through the `intervu/vite` relay; it runs no watcher and gets
+ * no `ArtifactReloaded`, since Vite's HMR reloads the app.
  */
 const eventsRoute = HttpRouter.add(
   "GET",
@@ -555,11 +557,17 @@ const eventsRoute = HttpRouter.add(
           const store = yield* SessionStore;
           const watcher = yield* ArtifactWatcher;
           const subscription = yield* hub.subscribe(session.key);
-          yield* watcher.track(session.key, session.path);
-
-          // Read after `track`, so an edit is either in this version or arrives
-          // live. The chrome ignores a version it already shows (ADR 0020).
-          const version = yield* watcher.version(session.path);
+          // An `app` Session's handle is an origin, not a file: Vite's HMR
+          // reloads the app, so there is nothing to watch and no version.
+          const version =
+            session.kind === "artifact"
+              ? yield* watcher.track(session.key, session.path).pipe(
+                  // Read after `track`, so an edit is either in this version
+                  // or arrives live. The chrome ignores a version it already
+                  // shows (ADR 0020).
+                  Effect.andThen(watcher.version(session.path)),
+                )
+              : Option.none<string>();
           const replay = yield* store.conversationSince(session.key, afterSeq);
           const presence = yield* hub.presence(session.key);
           // Subscribe-then-check (mirror of the poll): read the status after
