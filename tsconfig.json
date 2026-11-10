@@ -41,10 +41,12 @@
   // DOM lib. The DOM-free daemon still typechecks `src/sdk/protocol.ts` through
   // its server-side import of the shared annotation types. `tests/sdk` drives the
   // DOM capture logic, so it typechecks under the browser config too; the
-  // Playwright E2E specs and config typecheck under `e2e/tsconfig.json`.
+  // Playwright E2E specs and config typecheck under `e2e/tsconfig.json`. The
+  // `intervu/vite` in-page overlay (`src/overlay`) is DOM code like the SDK.
   "exclude": [
     "src/sdk",
     "src/chrome",
+    "src/overlay",
     "tests/sdk",
     "e2e",
     "playwright.config.ts"

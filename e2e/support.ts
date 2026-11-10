@@ -18,6 +18,15 @@ import {
  * own actionability and needs no extra gate).
  */
 
+/** The fixture Vite + React app, its plugin wired to the harness daemon. */
+export const fixtureAppPort = 51991;
+export const fixtureAppUrl = `http://localhost:${fixtureAppPort}`;
+
+/** The same fixture app, its plugin pointed at a port no daemon listens on. */
+export const noDaemonAppPort = 51992;
+export const noDaemonAppUrl = `http://localhost:${noDaemonAppPort}`;
+export const unusedDaemonPort = 51993;
+
 /** The absolute path of the committed fixture, the artifact under review. */
 export const fixturePath = new URL("./fixtures/artifact.html", import.meta.url)
   .pathname;

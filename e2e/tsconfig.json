@@ -12,5 +12,5 @@
     "plugins": []
   },
   "exclude": [],
-  "include": ["**/*.ts"]
+  "include": ["**/*.ts", "**/*.tsx"]
 }

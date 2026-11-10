@@ -33,3 +33,41 @@ await Bun.write(outPath, `#!/usr/bin/env bun\n${code}`);
 chmodSync(outPath, 0o755);
 
 console.error(`built ${outPath}`);
+
+/**
+ * Bundle the `intervu/vite` plugin into `dist/vite.js`. Vite loads it on Node,
+ * so it targets Node and carries no runtime dependency: the in-page overlay is
+ * inlined from the baked `generated/overlayAsset.ts`, and `vite` is only a type.
+ * Its declaration is written by hand because `Bun.build` emits no types.
+ */
+const pluginOutPath = "dist/vite.js";
+
+const pluginResult = await Bun.build({
+  entrypoints: ["src/vite/plugin.ts"],
+  target: "node",
+  format: "esm",
+});
+
+const pluginArtifact = pluginResult.success
+  ? pluginResult.outputs[0]
+  : undefined;
+if (pluginArtifact === undefined) {
+  for (const message of pluginResult.logs) {
+    console.error(message);
+  }
+  console.error("build produced no vite plugin output");
+  process.exit(1);
+}
+
+await Bun.write(pluginOutPath, await pluginArtifact.text());
+await Bun.write(
+  "dist/vite.d.ts",
+  `import type { Plugin } from "vite";
+
+/** The Vite plugin that wires intervu's URL mode into the dev server. */
+export declare const intervu: () => Plugin;
+export default intervu;
+`,
+);
+
+console.error(`built ${pluginOutPath}`);
