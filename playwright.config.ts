@@ -3,6 +3,8 @@ import { defineConfig, devices } from "@playwright/test";
 import {
   daemonPort,
   daemonStateDir,
+  endableAppPort,
+  endableAppUrl,
   fixtureAppDir,
   fixtureAppPort,
   fixtureAppUrl,
@@ -26,10 +28,11 @@ import {
  * `bun run test` (vitest) loop - run with `bun run test:e2e`.
  *
  * URL mode is proven against the fixture Vite + React app (`e2e/fixtures/app`),
- * served on Node with the `intervu/vite` plugin loaded from source: once wired to
- * the harness daemon, once to a port no daemon listens on, and once without the
- * plugin at all. The previous Vite major serves the same app from its own
- * workspace (`e2e/fixtures/app-previous-vite`).
+ * served on Node with the `intervu/vite` plugin loaded from source: twice wired
+ * to the harness daemon (one instance for specs that end its Session), once to
+ * a port no daemon listens on, and once without the plugin at all. The previous
+ * Vite major serves the same app from its own workspace
+ * (`e2e/fixtures/app-previous-vite`).
  */
 
 const baseURL = `http://127.0.0.1:${daemonPort}`;
@@ -37,7 +40,8 @@ const baseURL = `http://127.0.0.1:${daemonPort}`;
 /**
  * Serve the fixture app with the Vite CLI `bin` from the config in `dir` (or
  * the file `config` there), on `port`, with `INTERVU_PORT` set to `daemonPort`
- * for its plugin, if the config loads one.
+ * for its plugin, if the config loads one. `FIXTURE_APP_PORT` names `port` for
+ * a config that keys its dependency cache by instance.
  */
 const fixtureApp = ({
   bin,
@@ -59,7 +63,7 @@ const fixtureApp = ({
   url,
   reuseExistingServer: !process.env.CI,
   timeout: 120_000,
-  env: { INTERVU_PORT: String(daemonPort) },
+  env: { INTERVU_PORT: String(daemonPort), FIXTURE_APP_PORT: String(port) },
 });
 
 export default defineConfig({
@@ -90,6 +94,13 @@ export default defineConfig({
       dir: fixtureAppDir,
       port: fixtureAppPort,
       url: fixtureAppUrl,
+      daemonPort,
+    }),
+    fixtureApp({
+      bin: viteBin,
+      dir: fixtureAppDir,
+      port: endableAppPort,
+      url: endableAppUrl,
       daemonPort,
     }),
     fixtureApp({

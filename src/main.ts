@@ -23,6 +23,7 @@ import * as IdleShutdown from "./IdleShutdown.ts";
 import * as Output from "./Output.ts";
 import * as Server from "./Server.ts";
 import { ServerLifecycle } from "./ServerLifecycle.ts";
+import type { SessionKind } from "./Session.ts";
 import { SessionHub } from "./SessionHub.ts";
 import { SessionPersistence } from "./SessionPersistence.ts";
 import { SessionStore } from "./SessionStore.ts";
@@ -66,28 +67,59 @@ const root = Command.make(bin, {}, () =>
       })),
       help:
         live.length === 0
-          ? "no active reviews - run 'intervu <file>' to open one"
-          : "run 'intervu poll <file>' to receive feedback, or 'intervu <file>' to open another",
+          ? "no active reviews - run 'intervu <file|url>' to open one"
+          : "run 'intervu poll <file|url>' to receive feedback, or 'intervu <file|url>' to open another",
     });
     yield* emit(yield* Toon.encode(view));
   }),
 );
 
 /**
- * The `open` target: an absolute `http(s)` URL selects URL mode (ADR 0022),
- * anything else is the artifact file it always was. The URL is tried first, so
- * a file path never reaches the URL parser's error.
+ * The Session a command names: an absolute `http(s)` URL selects URL mode (ADR
+ * 0022), anything else is the artifact file it always was. The URL is tried
+ * first, so a file path never reaches the URL parser's error.
  */
-const openTarget = Argument.string("file|url").pipe(
-  Argument.filterMap(
-    AppUrl.parseAppUrl,
-    (raw) => `${raw} is not an http(s) URL`,
-  ),
-  Argument.orElseResult(() => Argument.file("file")),
-  Argument.withDescription(
-    "the HTML artifact to review, or a running app's URL such as http://localhost:5173",
-  ),
-);
+const sessionTarget = (description: string) =>
+  Argument.string("file|url").pipe(
+    Argument.filterMap(
+      AppUrl.parseAppUrl,
+      (raw) => `${raw} is not an http(s) URL`,
+    ),
+    Argument.orElseResult(() => Argument.file("file")),
+    Argument.withDescription(description),
+  );
+
+/** How `poll`, `reply` and `end` describe the Session they act on. */
+const reviewedTarget = "the artifact under review, or the reviewed app's URL";
+
+/** An artifact's realpath, the handle its Session is keyed by (ADR 0001). */
+const artifactRealPath = Effect.fn("artifactRealPath")(function* (
+  file: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* fs
+    .realPath(file)
+    .pipe(Effect.mapError(() => new ArtifactNotFound({ path: file })));
+});
+
+/**
+ * The Session `poll`, `reply` and `end` act on. `handle` is what the daemon
+ * finds it by: a URL's origin, so any route of the app names its Session (ADR
+ * 0022), or a file's realpath. `name` is how help lines spell the next command:
+ * the origin, or the file as typed. `kind` picks the help lines' wording.
+ */
+const resolveTarget = Effect.fn("resolveTarget")(function* (
+  target: Result.Result<AppUrl.AppUrl, string>,
+) {
+  if (Result.isSuccess(target)) {
+    const origin = target.success.origin;
+    const kind: SessionKind = "app";
+    return { handle: origin, name: origin, kind };
+  }
+  const file = target.failure;
+  const kind: SessionKind = "artifact";
+  return { handle: yield* artifactRealPath(file), name: file, kind };
+});
 
 /**
  * `intervu open <file>` (and the bare-file alias): resolve the artifact's
@@ -96,12 +128,9 @@ const openTarget = Argument.string("file|url").pipe(
  */
 const openArtifact = Effect.fn("openArtifact")(function* (file: string) {
   const config = yield* AppConfig;
-  const fs = yield* FileSystem.FileSystem;
   const lifecycle = yield* ServerLifecycle;
 
-  const realPath = yield* fs
-    .realPath(file)
-    .pipe(Effect.mapError(() => new ArtifactNotFound({ path: file })));
+  const realPath = yield* artifactRealPath(file);
 
   yield* lifecycle.ensure;
   const session = yield* lifecycle.openSession(realPath, "artifact");
@@ -159,7 +188,9 @@ const openApp = Effect.fn("openApp")(function* (
 const open = Command.make(
   "open",
   {
-    target: openTarget,
+    target: sessionTarget(
+      "the HTML artifact to review, or a running app's URL such as http://localhost:5173",
+    ),
     open: Flag.boolean("open").pipe(
       Flag.withDescription(
         "also open a browser tab at the URL (a file always opens one)",
@@ -176,19 +207,19 @@ const open = Command.make(
 );
 
 /**
- * `intervu poll <file>` (ADR 0009): the agent's long-poll. Resolve the
- * artifact's realpath, require an already-running daemon (no spawn), then hold a
- * single request open until the human sends - printing the drained Feedback as
- * TOON. `--timeout <seconds>` bounds the wait and prints `timedOut: true`
- * instead. `--agent-reply "<message>"` posts that message into the human's
- * conversation panel before waiting again (ADR 0010), so the agent can explain
- * what it changed and keep listening. Killing and re-running is safe: queued
- * Feedback survives.
+ * `intervu poll <file|url>` (ADR 0009): the agent's long-poll. Resolve the
+ * Session's handle (the artifact's realpath, or the app's origin), require an
+ * already-running daemon (no spawn), then hold a single request open until the
+ * human sends - printing the drained Feedback as TOON. `--timeout <seconds>`
+ * bounds the wait and prints `timedOut: true` instead. `--agent-reply
+ * "<message>"` posts that message into the human's conversation panel before
+ * waiting again (ADR 0010), so the agent can explain what it changed and keep
+ * listening. Killing and re-running is safe: queued Feedback survives.
  */
 const poll = Command.make(
   "poll",
   {
-    file: Argument.file("file"),
+    target: sessionTarget(reviewedTarget),
     timeout: Flag.optional(Flag.integer("timeout")).pipe(
       Flag.withDescription(
         "seconds to wait before returning timedOut (default: wait indefinitely)",
@@ -200,98 +231,96 @@ const poll = Command.make(
       ),
     ),
   },
-  ({ file, timeout, agentReply }) =>
+  ({ target, timeout, agentReply }) =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const lifecycle = yield* ServerLifecycle;
-
-      const realPath = yield* fs
-        .realPath(file)
-        .pipe(Effect.mapError(() => new ArtifactNotFound({ path: file })));
+      const { handle, name, kind } = yield* resolveTarget(target);
 
       yield* lifecycle.requireHealthy;
-      const response = yield* lifecycle.poll(realPath, timeout, agentReply);
+      const response = yield* lifecycle.poll(handle, timeout, agentReply);
       const snapshots = yield* SnapshotFiles;
       const delivered = yield* Effect.forEach(response.feedback, (feedback) =>
         snapshots
-          .save(realPath, feedback.domSnapshot)
+          .save(handle, feedback.domSnapshot)
           .pipe(Effect.map((snapshotPath) => ({ feedback, snapshotPath }))),
       );
 
+      const edit =
+        kind === "app" ? "edit the app's source" : "edit the artifact";
       const view = response.timedOut
         ? Output.pollTimedOut({
-            help: `no feedback within the timeout - run 'intervu poll ${file}' to keep listening`,
+            help: `no feedback within the timeout - run 'intervu poll ${name}' to keep listening`,
           })
         : response.ended
           ? Output.pollEnded({
               feedback: delivered,
-              help: `review ended - apply any final feedback above, then stop; re-run 'intervu ${file}' to reopen`,
+              help: `review ended - apply any final feedback above, then stop; re-run 'intervu ${name}' to reopen`,
             })
           : Output.pollFeedback({
               feedback: delivered,
-              help: `feedback received - edit the artifact or answer with 'intervu reply ${file} "<message>"', then 'intervu poll ${file}' to listen again`,
+              help: `feedback received - ${edit} or answer with 'intervu reply ${name} "<message>"', then 'intervu poll ${name}' to listen again`,
             });
       yield* emit(yield* Toon.encode(view));
     }),
 );
 
 /**
- * `intervu end <file>` (ADR 0011): the agent-facing end. Resolve the artifact's
- * realpath, require an already-running daemon (no spawn, mirroring `poll`), then
- * end the Session over `POST /end` and print the confirmation as TOON. No
- * final-feedback rider - that is the chrome's Send & end. Re-running
- * `intervu <file>` resurrects the path to a live review (ADR 0012).
- */
-/**
- * `intervu reply <file> <message>`: post an Agent-reply into the human's
+ * `intervu reply <file|url> <message>`: post an Agent-reply into the human's
  * conversation panel and return immediately (ADR 0020). Unlike `poll
  * --agent-reply` it never waits, so the agent can acknowledge feedback before a
  * long edit, or answer a question about the codebase, while a poll stays open.
  */
 const reply = Command.make(
   "reply",
-  { file: Argument.file("file"), message: Argument.string("message") },
-  ({ file, message }) =>
+  {
+    target: sessionTarget(reviewedTarget),
+    message: Argument.string("message"),
+  },
+  ({ target, message }) =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
       const lifecycle = yield* ServerLifecycle;
-
-      const realPath = yield* fs
-        .realPath(file)
-        .pipe(Effect.mapError(() => new ArtifactNotFound({ path: file })));
+      const { handle, name } = yield* resolveTarget(target);
 
       yield* lifecycle.requireHealthy;
-      const response = yield* lifecycle.reply(realPath, message);
+      const response = yield* lifecycle.reply(handle, message);
 
       const view = Output.replied({
         posted: response.posted,
         help: response.posted
-          ? `reply posted - keep a poll open with 'intervu poll ${file}'`
+          ? `reply posted - keep a poll open with 'intervu poll ${name}'`
           : response.ended
-            ? `nothing posted, the review has ended - re-run 'intervu ${file}' to reopen`
+            ? `nothing posted, the review has ended - re-run 'intervu ${name}' to reopen`
             : "nothing posted, the message was blank",
       });
       yield* emit(yield* Toon.encode(view));
     }),
 );
 
-const end = Command.make("end", { file: Argument.file("file") }, ({ file }) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const lifecycle = yield* ServerLifecycle;
+/**
+ * `intervu end <file|url>` (ADR 0011): the agent-facing end. Resolve the
+ * Session's handle, require an already-running daemon (no spawn, mirroring
+ * `poll`), then end the Session over `POST /end` and print the confirmation as
+ * TOON. No final-feedback rider - that is the chrome's Send & end. Re-running
+ * `intervu <file|url>` resurrects the Session to a live review (ADR 0012).
+ */
+const end = Command.make(
+  "end",
+  {
+    target: sessionTarget(reviewedTarget),
+  },
+  ({ target }) =>
+    Effect.gen(function* () {
+      const lifecycle = yield* ServerLifecycle;
+      const { handle, name } = yield* resolveTarget(target);
 
-    const realPath = yield* fs
-      .realPath(file)
-      .pipe(Effect.mapError(() => new ArtifactNotFound({ path: file })));
+      yield* lifecycle.requireHealthy;
+      yield* lifecycle.end(handle);
 
-    yield* lifecycle.requireHealthy;
-    yield* lifecycle.end(realPath);
-
-    const view = Output.ended({
-      help: `review ended - re-run 'intervu ${file}' to reopen`,
-    });
-    yield* emit(yield* Toon.encode(view));
-  }),
+      const view = Output.ended({
+        help: `review ended - re-run 'intervu ${name}' to reopen`,
+      });
+      yield* emit(yield* Toon.encode(view));
+    }),
 );
 
 /**

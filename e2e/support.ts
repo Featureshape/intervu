@@ -35,6 +35,14 @@ export const unusedDaemonPort = 51993;
 export const noPluginAppPort = 51995;
 export const noPluginAppUrl = `http://localhost:${noPluginAppPort}`;
 
+/**
+ * The same fixture app wired to the harness daemon, for specs that end its
+ * Session: a Session is keyed by origin, so ending this one never races the
+ * specs that keep the fixture app's Session open.
+ */
+export const endableAppPort = 51997;
+export const endableAppUrl = `http://localhost:${endableAppPort}`;
+
 /** A port no app listens on, for `intervu <url>` to find nothing at. */
 export const unreachableAppUrl = "http://localhost:51996";
 
