@@ -7,6 +7,7 @@ import {
 import type { AppUrl } from "./AppUrl.ts";
 import { AppUnreachable } from "./Errors.ts";
 import { Health } from "./Protocol.ts";
+import { relayPrefix } from "./vite/relayPaths.ts";
 
 /**
  * What `intervu <url>` checks about the running app before and after it opens
@@ -43,7 +44,7 @@ export const pluginAnswers = Effect.fn("AppProbe.pluginAnswers")(function* (
 ) {
   const client = yield* HttpClient.HttpClient;
   return yield* client
-    .execute(HttpClientRequest.get(`${origin}/__intervu/health`))
+    .execute(HttpClientRequest.get(`${origin}${relayPrefix}/health`))
     .pipe(
       Effect.flatMap(HttpClientResponse.filterStatusOk),
       Effect.flatMap(HttpClientResponse.schemaBodyJson(Health)),

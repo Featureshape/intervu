@@ -8,6 +8,8 @@
  * quota) leaves the panel working, only without the memory.
  */
 
+import { hasField } from "../hasField.ts";
+
 /** The slice of the Web Storage API the panel uses. */
 export interface TabStorage {
   readonly getItem: (key: string) => string | null;
@@ -66,10 +68,8 @@ export const writeDraft = (
 
 /** `value` as a panel position, or `null` unless it holds two finite numbers. */
 const positionIn = (value: unknown): PanelPosition | null =>
-  typeof value === "object" &&
-  value !== null &&
-  "left" in value &&
-  "top" in value &&
+  hasField(value, "left") &&
+  hasField(value, "top") &&
   typeof value.left === "number" &&
   typeof value.top === "number" &&
   Number.isFinite(value.left) &&

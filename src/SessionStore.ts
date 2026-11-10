@@ -9,6 +9,7 @@ import {
   SynchronizedRef,
 } from "effect";
 import * as Context from "effect/Context";
+import { sessionKeyLength } from "./DaemonRoutes.ts";
 import { ConversationEntry, type Feedback, type Role } from "./Protocol.ts";
 import { Session, SessionKey, type SessionKind } from "./Session.ts";
 import { SessionPersistence } from "./SessionPersistence.ts";
@@ -95,7 +96,7 @@ export class SessionStore extends Context.Service<
           const hex = Array.from(digest)
             .map((byte) => byte.toString(16).padStart(2, "0"))
             .join("")
-            .slice(0, 16);
+            .slice(0, sessionKeyLength);
           return SessionKey.make(hex);
         });
 

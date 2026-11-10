@@ -1,3 +1,4 @@
+import { hasField } from "../hasField.ts";
 import { createAnnotator } from "../sdk/annotator.ts";
 import { annotationToWire } from "../sdk/feedbackWire.ts";
 import {
@@ -538,6 +539,7 @@ const makeDraggable = (
   host: HTMLElement,
   panel: HTMLElement,
   handle: HTMLElement,
+  lifetime: AbortSignal,
 ): void => {
   let placed = false;
 
@@ -581,12 +583,16 @@ const makeDraggable = (
     handle.addEventListener("pointercancel", stop);
   });
 
-  window.addEventListener("resize", () => {
-    if (placed) {
-      const box = host.getBoundingClientRect();
-      placeAt(box.left, box.top);
-    }
-  });
+  window.addEventListener(
+    "resize",
+    () => {
+      if (placed) {
+        const box = host.getBoundingClientRect();
+        placeAt(box.left, box.top);
+      }
+    },
+    { signal: lifetime },
+  );
 
   const stored = readPosition(tabStorage);
   if (stored !== null) {
@@ -605,9 +611,37 @@ interface AppAnnotation {
   readonly pageUrl: string;
 }
 
-/** The JSX source of the nearest element above `anchor` the app's code wrote. */
-const sourceOf = (anchor: Element): string | null =>
-  anchor.closest(`[${sourceAttribute}]`)?.getAttribute(sourceAttribute) ?? null;
+/** The React fiber that rendered `node`, from React's dev expando, if any. */
+const fiberOf = (node: Element): unknown => {
+  const key = Object.keys(node).find((name) =>
+    name.startsWith("__reactFiber$"),
+  );
+  return key === undefined ? undefined : Reflect.get(node, key);
+};
+
+/**
+ * The JSX source of the nearest element above `anchor` the app's code wrote.
+ * It walks React's own tree first, so content a third-party component portals
+ * to `<body>` still names the app element that renders that component; the
+ * DOM's ancestors answer for anything React did not render.
+ */
+const sourceOf = (anchor: Element): string | null => {
+  let fiber = fiberOf(anchor);
+  while (hasField(fiber, "memoizedProps")) {
+    const props = fiber.memoizedProps;
+    if (
+      hasField(props, sourceAttribute) &&
+      typeof props[sourceAttribute] === "string"
+    ) {
+      return props[sourceAttribute];
+    }
+    fiber = hasField(fiber, "return") ? fiber.return : null;
+  }
+  return (
+    anchor.closest(`[${sourceAttribute}]`)?.getAttribute(sourceAttribute) ??
+    null
+  );
+};
 
 /** An annotation's wire shape, with the live app's source and page. */
 const toWire = ({ annotation, source, pageUrl }: AppAnnotation) => ({
@@ -712,6 +746,7 @@ const reviewControls = (
   readonly pending: HTMLElement;
   readonly composer: HTMLElement;
   readonly freeze: () => void;
+  readonly dispose: () => void;
 } => {
   const items = new Map<string, AppAnnotation>();
   let nextId = 0;
@@ -858,6 +893,7 @@ const reviewControls = (
     pending: section("Pending annotations", empty, list),
     composer,
     freeze,
+    dispose: annotator.dispose,
   };
 };
 
@@ -968,7 +1004,7 @@ const renderPanel = (
   body.id = "intervu-panel-body";
   body.setAttribute("data-intervu-panel-body", "");
 
-  const { pending, composer, freeze } = reviewControls(host, key);
+  const { pending, composer, freeze, dispose } = reviewControls(host, key);
 
   const endedNote = document.createElement("p");
   endedNote.className = "ended-note";
@@ -1011,7 +1047,9 @@ const renderPanel = (
   );
   panel.append(header, body, composer, endedNote);
   root.append(panel);
-  makeDraggable(host, panel, header);
+  // The panel's window listeners live until a resumed Session replaces it.
+  const lifetime = new AbortController();
+  makeDraggable(host, panel, header, lifetime.signal);
 
   // The Session's SSE stream, through the relay. Vite's HMR reloads the app,
   // so the daemon sends it no artifact version.
@@ -1025,6 +1063,13 @@ const renderPanel = (
       endedPill.hidden = false;
       freeze();
       setExpanded(!body.hidden);
+      // `intervu <url>` resumes an ended Session: once it is open again, this
+      // tab swaps in a fresh, live panel, as it did from the dormant badge.
+      watchForSession((next) => {
+        lifetime.abort();
+        dispose();
+        renderPanel(host, root, next);
+      });
     },
   });
 };

@@ -2,9 +2,8 @@ import { describe, expect, it } from "@effect/vitest";
 import { daemonPortFrom, defaultDaemonPort } from "../src/DaemonPort.ts";
 
 /**
- * The plugin reads `INTERVU_PORT` without Effect's `Config`, so its parse is
- * pinned here to the CLI's behaviour: a valid port wins, anything else falls
- * back to the shared default.
+ * The CLI's `AppConfig` and the plugin both read `INTERVU_PORT` through this
+ * parse: a valid port wins, anything else falls back to the shared default.
  */
 describe("daemonPortFrom", () => {
   it("takes a valid port", () => {

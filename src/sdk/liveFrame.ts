@@ -3,8 +3,11 @@
  * artifact chrome and URL mode's in-page panel so both render the same
  * Conversation, Presence and ended state from the same stream. Every frame is
  * untrusted JSON, so it is checked field by field before anything reads it.
- * This module imports nothing, so either browser bundle can take it in.
+ * This module imports only dependency-free modules, so either browser bundle
+ * can take it in.
  */
+
+import { hasField } from "../hasField.ts";
 
 /** The agent's state in the review loop (CONTEXT.md "Presence"). */
 export type Presence = "idle" | "listening" | "working";
@@ -28,15 +31,13 @@ const isPresence = (value: unknown): value is Presence =>
   value === "idle" || value === "listening" || value === "working";
 
 const isConversationEntry = (value: unknown): value is ConversationEntry =>
-  typeof value === "object" &&
-  value !== null &&
-  "seq" in value &&
+  hasField(value, "seq") &&
   typeof value.seq === "number" &&
-  "role" in value &&
+  hasField(value, "role") &&
   (value.role === "human" || value.role === "agent") &&
-  "text" in value &&
+  hasField(value, "text") &&
   typeof value.text === "string" &&
-  "annotationCount" in value &&
+  hasField(value, "annotationCount") &&
   typeof value.annotationCount === "number";
 
 /** The frame an SSE `message` event's `data` holds, or `null` for anything else. */
@@ -47,12 +48,12 @@ export const parseLiveFrame = (data: string): LiveFrame | null => {
   } catch {
     return null;
   }
-  if (typeof parsed !== "object" || parsed === null || !("_tag" in parsed)) {
+  if (!hasField(parsed, "_tag")) {
     return null;
   }
   if (
     parsed._tag === "PresenceChanged" &&
-    "presence" in parsed &&
+    hasField(parsed, "presence") &&
     isPresence(parsed.presence)
   ) {
     return { _tag: "PresenceChanged", presence: parsed.presence };
@@ -63,7 +64,7 @@ export const parseLiveFrame = (data: string): LiveFrame | null => {
   }
   if (
     parsed._tag === "ArtifactReloaded" &&
-    "version" in parsed &&
+    hasField(parsed, "version") &&
     typeof parsed.version === "string"
   ) {
     return { _tag: "ArtifactReloaded", version: parsed.version };

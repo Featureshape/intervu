@@ -67,6 +67,14 @@ export const conversationAppUrl = `http://localhost:${conversationAppPort}`;
 export const reloadAppPort = 52000;
 export const reloadAppUrl = `http://localhost:${reloadAppPort}`;
 
+/**
+ * The same fixture app wired to the harness daemon, for the session-commands
+ * spec: it lists this origin's Session as open, then ends it, so no other spec
+ * may end or re-open that Session in between.
+ */
+export const commandsAppPort = 52001;
+export const commandsAppUrl = `http://localhost:${commandsAppPort}`;
+
 /** A port no app listens on, for `intervu <url>` to find nothing at. */
 export const unreachableAppUrl = "http://localhost:51996";
 
@@ -174,15 +182,29 @@ export const armAnnotate = async (page: Page): Promise<void> => {
 };
 
 /** A non-null bounding box for `locator`, failing the test if it has none. */
-const boxOf = async (
+export const boxOf = async (
   locator: Locator,
 ): Promise<{ x: number; y: number; width: number; height: number }> => {
   const box = await locator.boundingBox();
   expect(box, "expected the element to have a bounding box").not.toBeNull();
-  if (box === null) {
-    return { x: 0, y: 0, width: 0, height: 0 };
-  }
-  return box;
+  return box ?? { x: 0, y: 0, width: 0, height: 0 };
+};
+
+/**
+ * Record the console errors and uncaught exceptions `page` reports into
+ * `problems`, and return it; pass one array to several tabs to share it.
+ */
+export const recordProblems = (
+  page: Page,
+  problems: string[] = [],
+): string[] => {
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      problems.push(`console: ${message.text()}`);
+    }
+  });
+  page.on("pageerror", (error) => problems.push(`pageerror: ${error.message}`));
+  return problems;
 };
 
 /** Drag-select the text of `locator` with a raw mouse gesture. */

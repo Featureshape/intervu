@@ -1,7 +1,14 @@
 import * as fs from "node:fs";
-import { expect, type Locator, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import type { JsonValue } from "@toon-format/toon";
 import { browserRecorder, fieldOf, runCli } from "./cli.ts";
+import {
+  annotate,
+  composerInput,
+  panel,
+  pendingRows,
+  sendButton,
+} from "./panel.ts";
 import { fixtureAppDir, fixtureAppUrl } from "./support.ts";
 
 /**
@@ -33,12 +40,6 @@ const jsxLocation = (opening: string): string => {
   return `${appSource}:${line + 1}:${(lines[line] ?? "").indexOf(opening) + 1}`;
 };
 
-const panel = (page: Page): Locator => page.locator("[data-intervu-panel]");
-const annotate = (page: Page): Locator =>
-  page.locator("[data-intervu-annotate]");
-const pendingRows = (page: Page): Locator =>
-  page.locator("[data-intervu-pending-id]");
-
 /** Open the fixture app's Session and drain anything already queued on it. */
 const openFreshSession = async (): Promise<void> => {
   const browser = browserRecorder();
@@ -67,8 +68,8 @@ const setAnnotate = async (page: Page, armed: boolean): Promise<void> => {
 
 /** Send the composer's message and pending annotations, and wait for it. */
 const send = async (page: Page, message: string): Promise<void> => {
-  await page.locator("[data-intervu-composer-input]").fill(message);
-  await page.locator("[data-intervu-send]").click();
+  await composerInput(page).fill(message);
+  await sendButton(page).click();
   await expect(pendingRows(page)).toHaveCount(0);
 };
 

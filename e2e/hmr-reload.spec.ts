@@ -1,7 +1,22 @@
 import * as fs from "node:fs";
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import { browserRecorder, runCli } from "./cli.ts";
-import { fixtureAppDir, reloadAppUrl } from "./support.ts";
+import {
+  annotate,
+  bubble,
+  collapse,
+  composerInput,
+  handle,
+  panel,
+  pendingRows,
+  sendButton,
+} from "./panel.ts";
+import {
+  boxOf,
+  fixtureAppDir,
+  recordProblems,
+  reloadAppUrl,
+} from "./support.ts";
 
 /**
  * URL mode across the app's own reloads (behaviours 18, 19): when the agent
@@ -20,41 +35,8 @@ test.describe.configure({ mode: "serial" });
 const noticeSource = `${fixtureAppDir}/src/Notice.tsx`;
 const noticeCopy = "Notice: first draft";
 
-const panel = (page: Page): Locator => page.locator("[data-intervu-panel]");
-const handle = (page: Page): Locator =>
-  page.locator("[data-intervu-panel-handle]");
-const composerInput = (page: Page): Locator =>
-  page.locator("[data-intervu-composer-input]");
-const collapse = (page: Page): Locator =>
-  page.locator("[data-intervu-collapse]");
-const pendingRows = (page: Page): Locator =>
-  page.locator("[data-intervu-pending-id]");
+/** The pins the overlay draws on the app for pending annotations. */
 const markers = (page: Page): Locator => page.locator(".marker");
-const humanBubble = (page: Page, text: string): Locator =>
-  page
-    .locator('[data-intervu-conversation] .bubble[data-role="human"]')
-    .filter({ hasText: text });
-
-/** A non-null bounding box for `locator`, failing the test if it has none. */
-const boxOf = async (
-  locator: Locator,
-): Promise<{ x: number; y: number; width: number; height: number }> => {
-  const box = await locator.boundingBox();
-  expect(box, "expected the element to have a bounding box").not.toBeNull();
-  return box ?? { x: 0, y: 0, width: 0, height: 0 };
-};
-
-/** Record the console errors and uncaught exceptions `page` reports. */
-const recordProblems = (page: Page): string[] => {
-  const problems: string[] = [];
-  page.on("console", (message) => {
-    if (message.type() === "error") {
-      problems.push(`console: ${message.text()}`);
-    }
-  });
-  page.on("pageerror", (error) => problems.push(`pageerror: ${error.message}`));
-  return problems;
-};
 
 /** Drag the panel by its header, by `dx` and `dy`; its box once dropped. */
 const dragPanel = async (
@@ -74,8 +56,8 @@ const dragPanel = async (
 /** Send `message` from the panel and wait for its bubble. */
 const send = async (page: Page, message: string): Promise<void> => {
   await composerInput(page).fill(message);
-  await page.locator("[data-intervu-send]").click();
-  await expect(humanBubble(page, message)).toBeVisible();
+  await sendButton(page).click();
+  await expect(bubble(page, "human", message)).toBeVisible();
 };
 
 test("an edit to a source file hot-reloads under the panel, which keeps its Conversation, annotation and place", async ({
@@ -95,7 +77,7 @@ test("an edit to a source file hot-reloads under the panel, which keeps its Conv
   // Review state the panel holds: a Conversation, a pending annotation, an
   // unsent message and a place away from its starting corner.
   await send(page, "Tighten the notice copy");
-  await page.locator("[data-intervu-annotate]").click();
+  await annotate(page).click();
   await page.locator("#headline").click();
   await expect(pendingRows(page)).toHaveCount(1);
   await expect(markers(page)).toHaveCount(1);
@@ -118,7 +100,9 @@ test("an edit to a source file hot-reloads under the panel, which keeps its Conv
       "data-loaded-once",
       "yes",
     );
-    await expect(humanBubble(page, "Tighten the notice copy")).toHaveCount(1);
+    await expect(bubble(page, "human", "Tighten the notice copy")).toHaveCount(
+      1,
+    );
     await expect(pendingRows(page)).toHaveCount(1);
     await expect(pendingRows(page)).toContainText("<h1>");
     await expect(markers(page)).toHaveCount(1);

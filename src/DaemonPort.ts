@@ -8,11 +8,12 @@
 export const defaultDaemonPort = 51789;
 
 /** The range a valid `INTERVU_PORT` falls in. */
-export const portRange = { minimum: 1, maximum: 65535 } as const;
+const portRange = { minimum: 1, maximum: 65535 } as const;
 
 /**
  * The port an `INTERVU_PORT` value names, or the default when it is unset or
- * not an integer in range - the same fallback `AppConfig` applies.
+ * not an integer in range. `AppConfig` and the plugin both read it through
+ * here, so the CLI and the plugin always agree on the port.
  */
 export const daemonPortFrom = (raw: string | undefined): number => {
   const port =

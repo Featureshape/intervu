@@ -17,6 +17,7 @@ import { AppConfig } from "./AppConfig.ts";
 import * as ArtifactAssets from "./ArtifactAssets.ts";
 import { ArtifactWatcher } from "./ArtifactWatcher.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
+import { appSessionPath } from "./DaemonRoutes.ts";
 import * as FeedbackWait from "./FeedbackWait.ts";
 import {
   AppSessionRequest,
@@ -130,7 +131,7 @@ const sessionsRoute = HttpRouter.add(
  */
 const appSessionRoute = HttpRouter.add(
   "GET",
-  "/apps/session",
+  appSessionPath,
   Effect.gen(function* () {
     const store = yield* SessionStore;
     const query =
@@ -150,7 +151,7 @@ const appSessionRoute = HttpRouter.add(
       Effect.succeed(HttpServerResponse.empty({ status: 400 })),
     ),
     Effect.catch((error) =>
-      Effect.logError("GET /apps/session failed", error).pipe(
+      Effect.logError(`GET ${appSessionPath} failed`, error).pipe(
         Effect.as(HttpServerResponse.empty({ status: 500 })),
       ),
     ),

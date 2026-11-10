@@ -1,12 +1,14 @@
-import {
-  type BrowserContext,
-  expect,
-  type Locator,
-  type Page,
-  test,
-} from "@playwright/test";
+import { type BrowserContext, expect, type Page, test } from "@playwright/test";
 import { browserRecorder, fieldOf, runCli } from "./cli.ts";
-import { conversationAppUrl } from "./support.ts";
+import {
+  annotate,
+  bubble,
+  composerInput,
+  panel,
+  presenceLabel,
+  sendButton,
+} from "./panel.ts";
+import { conversationAppUrl, recordProblems } from "./support.ts";
 
 /**
  * URL mode's live panel (behaviours 20, 21): every tab open on the origin
@@ -20,27 +22,6 @@ import { conversationAppUrl } from "./support.ts";
  */
 
 test.describe.configure({ mode: "serial" });
-
-const panel = (page: Page): Locator => page.locator("[data-intervu-panel]");
-
-/** The bubble of `role` in the panel's Conversation that reads `text`. */
-const bubble = (page: Page, role: "human" | "agent", text: string): Locator =>
-  page
-    .locator(`[data-intervu-conversation] .bubble[data-role="${role}"]`)
-    .filter({ hasText: text });
-
-const presenceLabel = (page: Page): Locator =>
-  page.locator("[data-intervu-presence-label]");
-
-/** Record the console errors and uncaught exceptions `page` reports. */
-const recordProblems = (page: Page, problems: string[]): void => {
-  page.on("console", (message) => {
-    if (message.type() === "error") {
-      problems.push(`console: ${message.text()}`);
-    }
-  });
-  page.on("pageerror", (error) => problems.push(`pageerror: ${error.message}`));
-};
 
 /**
  * Load the app in `page`, recording its problems from before the first byte,
@@ -114,13 +95,13 @@ test("a message sent from one tab appears live in the other tab's panel", async 
   const watcher = await openTab(context, problems);
 
   const message = `The footer overlaps the list - sent ${Date.now()}`;
-  await sender.locator("[data-intervu-composer-input]").fill(message);
-  await sender.locator("[data-intervu-send]").click();
+  await composerInput(sender).fill(message);
+  await sendButton(sender).click();
 
   // The sender renders its own message from the stream too, not optimistically.
   await expect(bubble(sender, "human", message)).toBeVisible();
   await expect(bubble(watcher, "human", message)).toBeVisible();
-  await expect(sender.locator("[data-intervu-composer-input]")).toHaveValue("");
+  await expect(composerInput(sender)).toHaveValue("");
 
   // A tab opened afterwards replays the Conversation so far.
   const late = await openTab(context, problems);
@@ -151,11 +132,8 @@ test("Presence shows while intervu poll <url> waits, and intervu end <url> shows
   await expect(page.locator("[data-intervu-ended-pill]")).toBeHidden();
 
   // Arm Annotate first, so the end visibly hands the app its clicks back.
-  await page.locator("[data-intervu-annotate]").click();
-  await expect(page.locator("[data-intervu-annotate]")).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  await annotate(page).click();
+  await expect(annotate(page)).toHaveAttribute("aria-pressed", "true");
 
   const ended = await runCli(["end", conversationAppUrl], browser);
   expect(ended.exitCode).toBe(0);
@@ -168,11 +146,8 @@ test("Presence shows while intervu poll <url> waits, and intervu end <url> shows
     "This review has ended.",
   );
   await expect(page.locator("[data-intervu-composer]")).toBeHidden();
-  await expect(page.locator("[data-intervu-annotate]")).toBeDisabled();
-  await expect(page.locator("[data-intervu-annotate]")).toHaveAttribute(
-    "aria-pressed",
-    "false",
-  );
+  await expect(annotate(page)).toBeDisabled();
+  await expect(annotate(page)).toHaveAttribute("aria-pressed", "false");
 
   // With the review over, the app's own handler runs again.
   await page.locator("#counter").click();

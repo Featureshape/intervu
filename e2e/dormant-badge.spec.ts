@@ -1,7 +1,12 @@
 import { expect, type Page, test } from "@playwright/test";
 import { version } from "vite";
 import { viteVersionHeaderName } from "./fixtures/app/devServer.ts";
-import { noDaemonAppUrl, previousViteAppUrl } from "./support.ts";
+import { badge } from "./panel.ts";
+import {
+  noDaemonAppUrl,
+  previousViteAppUrl,
+  recordProblems,
+} from "./support.ts";
 
 /**
  * URL mode at rest: the fixture Vite + React app loads the `intervu/vite`
@@ -27,13 +32,7 @@ const expectDormantBadge = async (
   url: string,
   major: number,
 ): Promise<void> => {
-  const problems: string[] = [];
-  page.on("console", (message) => {
-    if (message.type() === "error") {
-      problems.push(`console: ${message.text()}`);
-    }
-  });
-  page.on("pageerror", (error) => problems.push(`pageerror: ${error.message}`));
+  const problems = recordProblems(page);
   page.on("requestfailed", (request) =>
     problems.push(`requestfailed: ${request.url()}`),
   );
@@ -50,19 +49,19 @@ const expectDormantBadge = async (
   );
   await expect(page.locator("#headline")).toHaveText("Fixture app");
 
-  const badge = page.locator("[data-intervu-badge]");
-  await expect(badge).toHaveText("intervu: no agent");
-  await expect(badge).toHaveAttribute("data-intervu-badge", "dormant");
+  const dormant = badge(page);
+  await expect(dormant).toHaveText("intervu: no agent");
+  await expect(dormant).toHaveAttribute("data-intervu-badge", "dormant");
 
   const command = page.locator("[data-intervu-command]");
   await expect(command).toBeHidden();
-  await badge.click();
-  await expect(badge).toHaveAttribute("aria-expanded", "true");
+  await dormant.click();
+  await expect(dormant).toHaveAttribute("aria-expanded", "true");
   await expect(command).toBeVisible();
   await expect(command).toHaveText(`intervu ${url}`);
 
   // The badge closes again, and the app underneath keeps behaving natively.
-  await badge.click();
+  await dormant.click();
   await expect(command).toBeHidden();
   await page.locator("#counter").click();
   await expect(page.locator("#counter")).toHaveText("Clicked 1 times");
@@ -83,7 +82,7 @@ test("the overlay lives in its own shadow root, outside the app's DOM", async ({
   page,
 }) => {
   await page.goto(noDaemonAppUrl);
-  await expect(page.locator("[data-intervu-badge]")).toBeVisible();
+  await expect(badge(page)).toBeVisible();
   const placement = await page.evaluate(() => {
     const host = document.querySelector("intervu-overlay");
     return {

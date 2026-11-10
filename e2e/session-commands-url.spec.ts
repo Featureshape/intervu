@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { browserRecorder, fieldOf, runCli } from "./cli.ts";
-import { endableAppUrl, tempArtifact } from "./support.ts";
+import { commandsAppUrl, tempArtifact } from "./support.ts";
 
 /**
  * URL mode's agent loop (behaviours 9, 10): bare `intervu` lists the app's
@@ -19,7 +19,7 @@ test("bare intervu lists the URL-mode Session beside an artifact Session", async
   const browser = browserRecorder();
   const artifact = tempArtifact("listed beside an app");
   const openedFile = await runCli([artifact], browser);
-  const openedApp = await runCli([endableAppUrl], browser);
+  const openedApp = await runCli([commandsAppUrl], browser);
   expect(openedFile.exitCode).toBe(0);
   expect(openedApp.exitCode).toBe(0);
 
@@ -34,7 +34,7 @@ test("bare intervu lists the URL-mode Session beside an artifact Session", async
   });
   expect(sessions).toContainEqual({
     key: fieldOf(openedApp.output, "key"),
-    path: endableAppUrl,
+    path: commandsAppUrl,
     status: "open",
   });
   expect(fieldOf(home.output, "help")).toBe(
@@ -53,10 +53,10 @@ const cases = [
   {
     kind: "a URL",
     target: () => ({
-      open: endableAppUrl,
+      open: commandsAppUrl,
       // Any route of the app names the origin's Session.
-      route: `${endableAppUrl}/settings?tab=profile`,
-      name: endableAppUrl,
+      route: `${commandsAppUrl}/settings?tab=profile`,
+      name: commandsAppUrl,
       edit: "edit the app's source",
     }),
   },

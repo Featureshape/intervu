@@ -3,7 +3,7 @@ import * as Context from "effect/Context";
 import { version as packageVersion } from "../package.json" with {
   type: "json",
 };
-import { defaultDaemonPort, portRange } from "./DaemonPort.ts";
+import { daemonPortFrom } from "./DaemonPort.ts";
 
 /**
  * The version reported by `GET /health` and `intervu --version`, read from
@@ -14,11 +14,6 @@ export const version = packageVersion;
 
 /** Default idle-shutdown grace in seconds; `INTERVU_IDLE_TIMEOUT` overrides. */
 const defaultIdleSeconds = 30;
-
-const Port = Schema.NumberFromString.pipe(
-  Schema.check(Schema.isInt()),
-  Schema.check(Schema.isBetween(portRange)),
-);
 
 const IdleSeconds = Schema.NumberFromString.pipe(
   Schema.check(Schema.isInt()),
@@ -51,8 +46,9 @@ export class AppConfig extends Context.Service<
     AppConfig,
     Effect.gen(function* () {
       const path = yield* Path.Path;
-      const port = yield* Config.schema(Port, "INTERVU_PORT").pipe(
-        Config.orElse(() => Config.succeed(defaultDaemonPort)),
+      const port = yield* Config.string("INTERVU_PORT").pipe(
+        Config.option,
+        Config.map((raw) => daemonPortFrom(Option.getOrUndefined(raw))),
       );
       const idleSeconds = yield* Config.schema(
         IdleSeconds,

@@ -1,6 +1,8 @@
 import process from "node:process";
 import { defineConfig, devices } from "@playwright/test";
 import {
+  commandsAppPort,
+  commandsAppUrl,
   conversationAppPort,
   conversationAppUrl,
   daemonPort,
@@ -96,41 +98,16 @@ export default defineConfig({
         INTERVU_STATE_DIR: daemonStateDir,
       },
     },
-    fixtureApp({
-      bin: viteBin,
-      dir: fixtureAppDir,
-      port: fixtureAppPort,
-      url: fixtureAppUrl,
-      daemonPort,
-    }),
-    fixtureApp({
-      bin: viteBin,
-      dir: fixtureAppDir,
-      port: endableAppPort,
-      url: endableAppUrl,
-      daemonPort,
-    }),
-    fixtureApp({
-      bin: viteBin,
-      dir: fixtureAppDir,
-      port: panelAppPort,
-      url: panelAppUrl,
-      daemonPort,
-    }),
-    fixtureApp({
-      bin: viteBin,
-      dir: fixtureAppDir,
-      port: conversationAppPort,
-      url: conversationAppUrl,
-      daemonPort,
-    }),
-    fixtureApp({
-      bin: viteBin,
-      dir: fixtureAppDir,
-      port: reloadAppPort,
-      url: reloadAppUrl,
-      daemonPort,
-    }),
+    ...[
+      { port: fixtureAppPort, url: fixtureAppUrl },
+      { port: endableAppPort, url: endableAppUrl },
+      { port: panelAppPort, url: panelAppUrl },
+      { port: conversationAppPort, url: conversationAppUrl },
+      { port: reloadAppPort, url: reloadAppUrl },
+      { port: commandsAppPort, url: commandsAppUrl },
+    ].map(({ port, url }) =>
+      fixtureApp({ bin: viteBin, dir: fixtureAppDir, port, url, daemonPort }),
+    ),
     fixtureApp({
       bin: viteBin,
       dir: fixtureAppDir,

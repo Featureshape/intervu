@@ -1,5 +1,6 @@
 import * as http from "node:http";
 import { isIP } from "node:net";
+import { appSessionUrl, sessionKeyPattern } from "../DaemonRoutes.ts";
 import { relayPrefix } from "./relayPaths.ts";
 import { openSessionKeyIn } from "./sessionAnswer.ts";
 
@@ -131,8 +132,8 @@ const ownSessionRoutes: readonly {
   readonly method: string;
   readonly path: RegExp;
 }[] = [
-  { method: "POST", path: /^\/s\/([0-9a-f]{16})\/feedback$/ },
-  { method: "GET", path: /^\/s\/([0-9a-f]{16})\/events$/ },
+  { method: "POST", path: new RegExp(`^/s/(${sessionKeyPattern})/feedback$`) },
+  { method: "GET", path: new RegExp(`^/s/(${sessionKeyPattern})/events$`) },
 ];
 
 /** Whether the page may reach `path` on the daemon with `method`. */
@@ -278,7 +279,7 @@ const lookupSession = (
       {
         host: "127.0.0.1",
         port,
-        path: `/apps/session?${new URLSearchParams({ origin })}`,
+        path: appSessionUrl(origin),
         timeout: lookupTimeoutMs,
         signal,
       },
