@@ -12,6 +12,8 @@ export const prebundledDeps = [
   "react-dom",
   "react-dom/client",
   "react/jsx-dev-runtime",
+  "react/jsx-runtime",
+  "fixture-widget",
 ];
 
 /** The response header that names the Vite version serving the fixture app. */

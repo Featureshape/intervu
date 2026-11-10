@@ -7,3 +7,8 @@ dist
 .claude/settings.local.json
 test-results
 playwright-report
+
+# The fixture app's one committed third-party package; Vite's caches beside it stay ignored.
+!/e2e/fixtures/app/node_modules/
+/e2e/fixtures/app/node_modules/*
+!/e2e/fixtures/app/node_modules/fixture-widget/

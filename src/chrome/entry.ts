@@ -1,4 +1,5 @@
 import { onMessageFromFrame, postToFrame } from "../sdk/bridge.ts";
+import { annotationToWire } from "../sdk/feedbackWire.ts";
 import type { AnnotateMode, Annotation } from "../sdk/protocol.ts";
 
 /**
@@ -238,23 +239,6 @@ const createPending = (iframe: HTMLIFrameElement): Pending => {
   };
 };
 
-/** The id-less wire shape of an annotation (Protocol mirror): queue order is identity. */
-const toWire = (annotation: Annotation) =>
-  annotation.kind === "text"
-    ? {
-        kind: "text",
-        selector: annotation.selector,
-        tag: annotation.tag,
-        text: annotation.text,
-        selectedText: annotation.selectedText,
-      }
-    : {
-        kind: "element",
-        selector: annotation.selector,
-        tag: annotation.tag,
-        text: annotation.text,
-      };
-
 /**
  * Capture the live DOM the human annotated (ADR 0008): post `snapshot-request`
  * down the Bridge and resolve with the `snapshot-result` the SDK returns. The
@@ -295,7 +279,7 @@ const postFeedback = (
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       message,
-      annotations: annotations.map(toWire),
+      annotations: annotations.map(annotationToWire),
       domSnapshot,
     }),
   }).then((response) => response.ok);
@@ -323,7 +307,7 @@ const postEnd = (key: string, rider: EndRider | null): Promise<boolean> =>
         : {
             feedback: {
               message: rider.message,
-              annotations: rider.annotations.map(toWire),
+              annotations: rider.annotations.map(annotationToWire),
               domSnapshot: rider.domSnapshot,
             },
           },

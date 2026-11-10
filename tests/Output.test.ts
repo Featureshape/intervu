@@ -150,6 +150,61 @@ describe("Output.pollFeedback", () => {
     });
   });
 
+  it("keeps a live app annotation's source and pageUrl after its context", () => {
+    const feedback = new Feedback({
+      message: "fix the label",
+      annotations: [
+        {
+          kind: "element",
+          selector: "#counter",
+          tag: "button",
+          text: "Clicked 0 times",
+          source: "/app/src/App.tsx:29:7",
+          pageUrl: "http://localhost:5173/settings?tab=profile",
+        },
+        {
+          kind: "text",
+          selector: "#widget",
+          tag: "span",
+          text: "Third-party widget",
+          selectedText: "widget",
+          pageUrl: "http://localhost:5173/",
+        },
+      ],
+      domSnapshot: "<html></html>",
+    });
+
+    const view = Output.pollFeedback({
+      feedback: [{ feedback, snapshotPath: Option.some("/s/a.html") }],
+      help: "next step",
+    });
+
+    const [element, text] = view.feedback[0]?.annotations ?? [];
+    expect(Object.keys(element ?? {})).toEqual([
+      "n",
+      "kind",
+      "selector",
+      "tag",
+      "text",
+      "source",
+      "pageUrl",
+    ]);
+    expect(element).toMatchObject({
+      source: "/app/src/App.tsx:29:7",
+      pageUrl: "http://localhost:5173/settings?tab=profile",
+    });
+    // No app code above the target: the key is omitted, not empty.
+    expect(Object.keys(text ?? {})).toEqual([
+      "n",
+      "kind",
+      "selector",
+      "tag",
+      "text",
+      "selectedText",
+      "pageUrl",
+    ]);
+  });
+
   it("delivers the snapshot inline when it could not be saved", () => {
     const view = Output.pollFeedback({
       feedback: [

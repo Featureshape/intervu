@@ -4,6 +4,7 @@ import {
   guardRequest,
   isRelayedRoute,
   ownOriginOf,
+  ownSessionRouteKey,
 } from "../../src/vite/relay.ts";
 
 /**
@@ -117,5 +118,22 @@ describe("ownOriginOf", () => {
     expect(ownOriginOf({ host: "127.0.0.1:4443", https: true })).toBe(
       "https://127.0.0.1:4443",
     );
+  });
+});
+
+describe("ownSessionRouteKey", () => {
+  it("names the Session key of a feedback POST", () => {
+    expect(ownSessionRouteKey("POST", "/s/0123456789abcdef/feedback")).toBe(
+      "0123456789abcdef",
+    );
+  });
+
+  it("is null for any other method, path or key shape", () => {
+    expect(
+      ownSessionRouteKey("GET", "/s/0123456789abcdef/feedback"),
+    ).toBeNull();
+    expect(ownSessionRouteKey("POST", "/s/0123456789abcdef/end")).toBeNull();
+    expect(ownSessionRouteKey("POST", "/s/not-a-key/feedback")).toBeNull();
+    expect(ownSessionRouteKey("POST", "/health")).toBeNull();
   });
 });

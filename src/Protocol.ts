@@ -57,12 +57,20 @@ export class AppSessionResponse extends Schema.Class<AppSessionResponse>(
  * "Annotation"; ADR 0005), discriminated on `kind` to match what the chrome
  * posts. The iframe-minted `id` is dropped at this boundary: queue order is the
  * ordering this slice and the poll's 1-based `n` is the badge the human saw.
+ *
+ * An annotation made on a live app in URL mode also carries `pageUrl`, the page
+ * it was made on, and, when the clicked element or an ancestor came from the
+ * app's own JSX, `source`: that element's `file:line:col`, read from the
+ * `data-intervu-src` stamp of the `intervu/vite` plugin. An artifact annotation
+ * has neither.
  */
 const ElementAnnotation = Schema.Struct({
   kind: Schema.Literal("element"),
   selector: Schema.String,
   tag: Schema.String,
   text: Schema.String,
+  source: Schema.optional(Schema.String),
+  pageUrl: Schema.optional(Schema.String),
 });
 
 /** A `text` annotation also carries the selected run of text it anchors to. */
@@ -72,6 +80,8 @@ const TextAnnotation = Schema.Struct({
   tag: Schema.String,
   text: Schema.String,
   selectedText: Schema.String,
+  source: Schema.optional(Schema.String),
+  pageUrl: Schema.optional(Schema.String),
 });
 
 /** Either annotation kind; discriminated on `kind`. */

@@ -64,8 +64,8 @@ await Bun.write(
   "dist/vite.d.ts",
   `import type { Plugin } from "vite";
 
-/** The Vite plugin that wires intervu's URL mode into the dev server. */
-export declare const intervu: () => Plugin;
+/** The Vite plugins that wire intervu's URL mode into the dev server. */
+export declare const intervu: () => Plugin[];
 export default intervu;
 `,
 );

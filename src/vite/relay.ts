@@ -1,5 +1,7 @@
 import * as http from "node:http";
 import { isIP } from "node:net";
+import { relayPrefix } from "./relayPaths.ts";
+import { openSessionKeyIn } from "./sessionAnswer.ts";
 
 /**
  * The relay half of the `intervu/vite` plugin: the dev server mounts it under
@@ -119,11 +121,39 @@ export const guardRequest = (input: GuardInput): GuardRejection | null => {
   return null;
 };
 
+/**
+ * The Session-scoped daemon routes the page may reach through the relay, by
+ * method; the first capture group of `path` is the Session key. The relay
+ * forwards one only for the `app` Session open for the page's own origin, so a
+ * script in the app cannot reach another Session by guessing its key.
+ */
+const ownSessionRoutes: readonly {
+  readonly method: string;
+  readonly path: RegExp;
+}[] = [{ method: "POST", path: /^\/s\/([0-9a-f]{16})\/feedback$/ }];
+
 /** Whether the page may reach `path` on the daemon with `method`. */
 export const isRelayedRoute = (method: string, path: string): boolean =>
   relayedRoutes.some(
     (route) => route.method === method && route.path.test(path),
   );
+
+/**
+ * The Session key a Session-scoped relay route names, or `null` when `method`
+ * and `path` are not one.
+ */
+export const ownSessionRouteKey = (
+  method: string,
+  path: string,
+): string | null => {
+  for (const route of ownSessionRoutes) {
+    const key = route.method === method ? route.path.exec(path)?.[1] : null;
+    if (key !== undefined && key !== null) {
+      return key;
+    }
+  }
+  return null;
+};
 
 /** A single-valued request header, or `undefined` when absent. */
 const headerOf = (
@@ -230,49 +260,110 @@ const lookupTimeoutMs = 1_000;
 const noSession = JSON.stringify({ session: null });
 
 /**
- * Answer the overlay's "is a Session open for this origin?" by asking the
- * daemon's `GET /apps/session` for `origin`, the dev server's own origin as the
- * page reached it. The overlay asks every second while it rests as the dormant
- * badge, so a daemon that is not running, or not answering in time, is the
- * ordinary "no Session" answer rather than a `502`: a failed request would print
- * an error in the app's console that the page cannot suppress.
+ * Ask the daemon's `GET /apps/session` which Session is open for `origin`, the
+ * dev server's own origin as the page reached it. Resolves the daemon's JSON
+ * answer, or `null` when the daemon is not running, not answering in time, or
+ * answering anything but a `200`. Aborting `signal` gives up on the daemon.
+ */
+const lookupSession = (
+  port: number,
+  origin: string,
+  signal: AbortSignal,
+): Promise<string | null> =>
+  new Promise((resolve) => {
+    const upstream = http.get(
+      {
+        host: "127.0.0.1",
+        port,
+        path: `/apps/session?${new URLSearchParams({ origin })}`,
+        timeout: lookupTimeoutMs,
+        signal,
+      },
+      (daemonResponse) => {
+        if (daemonResponse.statusCode !== 200) {
+          daemonResponse.resume();
+          resolve(null);
+          return;
+        }
+        const chunks: Buffer[] = [];
+        daemonResponse.on("data", (chunk: Buffer) => chunks.push(chunk));
+        daemonResponse.on("end", () =>
+          resolve(Buffer.concat(chunks).toString("utf8")),
+        );
+        daemonResponse.on("error", () => resolve(null));
+      },
+    );
+    upstream.on("timeout", () => upstream.destroy());
+    upstream.on("error", () => resolve(null));
+  });
+
+/** An abort signal that fires once `response` closes, the page gone. */
+const closeSignalOf = (response: http.ServerResponse): AbortSignal => {
+  const controller = new AbortController();
+  response.on("close", () => controller.abort());
+  return controller.signal;
+};
+
+/** The open Session's key in the daemon's raw lookup answer, or `null`. */
+const openSessionKeyOf = (answer: string): string | null => {
+  try {
+    return openSessionKeyIn(JSON.parse(answer));
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Answer the overlay's "is a Session open for this origin?" with the daemon's
+ * `GET /apps/session` answer for `origin`. The overlay asks every second while
+ * it rests as the dormant badge, so a daemon that is not running, or not
+ * answering in time, is the ordinary "no Session" answer rather than a `502`:
+ * a failed request would print an error in the app's console that the page
+ * cannot suppress.
  */
 export const answerSessionLookup = (
   response: http.ServerResponse,
   port: number,
   origin: string,
 ): void => {
-  const answer = (body: string): void => {
+  lookupSession(port, origin, closeSignalOf(response)).then((answer) => {
     if (!response.headersSent && !response.destroyed) {
       response.writeHead(200, {
         "content-type": "application/json",
         "cache-control": "no-store",
       });
-      response.end(body);
+      response.end(answer ?? noSession);
     }
-  };
-  const upstream = http.get(
-    {
-      host: "127.0.0.1",
-      port,
-      path: `/apps/session?${new URLSearchParams({ origin })}`,
-      timeout: lookupTimeoutMs,
-    },
-    (daemonResponse) => {
-      if (daemonResponse.statusCode !== 200) {
-        daemonResponse.resume();
-        answer(noSession);
-        return;
-      }
-      const chunks: Buffer[] = [];
-      daemonResponse.on("data", (chunk: Buffer) => chunks.push(chunk));
-      daemonResponse.on("end", () =>
-        answer(Buffer.concat(chunks).toString("utf8")),
+  });
+};
+
+/**
+ * Forward a Session-scoped request for `key` to the daemon as `path`, but only
+ * when `key` is the Session open for `origin`, the page's own; any other key,
+ * or no open Session, is a `404 RouteNotRelayed`, the same as a route the relay
+ * does not know.
+ */
+export const relayToOwnSession = (
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+  port: number,
+  origin: string,
+  key: string,
+  path: string,
+): void => {
+  lookupSession(port, origin, closeSignalOf(response)).then((answer) => {
+    if (response.headersSent || response.destroyed) {
+      return;
+    }
+    if (answer === null || openSessionKeyOf(answer) !== key) {
+      sendError(
+        response,
+        404,
+        "RouteNotRelayed",
+        `${request.method ?? "GET"} ${relayPrefix}${path} is not a route of the Session open for ${origin}`,
       );
-      daemonResponse.on("error", () => answer(noSession));
-    },
-  );
-  upstream.on("timeout", () => upstream.destroy());
-  upstream.on("error", () => answer(noSession));
-  response.on("close", () => upstream.destroy());
+      return;
+    }
+    relayToDaemon(request, response, port, path);
+  });
 };

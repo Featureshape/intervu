@@ -95,6 +95,8 @@ export const appSession = (params: AppSessionView): AppSessionView => ({
  * One annotation as the poll prints it: `n` is the 1-based badge number the
  * human saw, then the selector context. `selectedText` is present only on the
  * `text` kind, so the key is omitted entirely for an `element` annotation.
+ * `source` (the JSX `file:line:col`) and `pageUrl` come only from a live app in
+ * URL mode, and are likewise omitted when absent.
  */
 export interface PollAnnotationView {
   readonly n: number;
@@ -103,6 +105,8 @@ export interface PollAnnotationView {
   readonly tag: string;
   readonly text: string;
   readonly selectedText?: string;
+  readonly source?: string;
+  readonly pageUrl?: string;
 }
 
 /**
@@ -162,9 +166,16 @@ const shapeAnnotation = (
     tag: annotation.tag,
     text: annotation.text,
   };
-  return annotation.kind === "text"
-    ? { ...base, selectedText: annotation.selectedText }
-    : base;
+  return {
+    ...base,
+    ...(annotation.kind === "text"
+      ? { selectedText: annotation.selectedText }
+      : {}),
+    ...(annotation.source === undefined ? {} : { source: annotation.source }),
+    ...(annotation.pageUrl === undefined
+      ? {}
+      : { pageUrl: annotation.pageUrl }),
+  };
 };
 
 const shapeFeedback = ({

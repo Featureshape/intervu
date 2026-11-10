@@ -1,3 +1,4 @@
+import { FixtureWidget } from "fixture-widget";
 import { useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -36,6 +37,9 @@ export const App = () => {
       <button id="raise-wall" type="button" onClick={() => setWall(true)}>
         Raise the z-index wall
       </button>
+      <section id="widget-slot">
+        <FixtureWidget />
+      </section>
       {wall && <ZIndexWall />}
     </main>
   );
