@@ -86,21 +86,66 @@ describe("AppProbe.requireAnswer", () => {
 });
 
 describe("AppProbe.pluginAnswers", () => {
-  it.effect("is true only for the daemon's health body", () =>
+  const key = "0123456789abcdef";
+  const json =
+    (body: unknown, status = 200) =>
+    () =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+
+  it.effect("tells a relay that sees the Session from every other answer", () =>
     Effect.gen(function* () {
-      const health = JSON.stringify({ ok: true, version: "0.0.0" });
       const answers = yield* Effect.forEach(
         [
-          () => new Response(health),
+          json({ session: { key, status: "open" } }),
+          json({ session: null }),
+          json({ session: { key: "fedcba9876543210", status: "open" } }),
+          json({ error: { tag: "ForeignOrigin", message: "no" } }, 403),
           () => new Response("<!doctype html><html></html>"),
-          () => new Response(health, { status: 502 }),
+          json({ session: { key, status: "open" } }, 502),
+          json({ ok: true, version: "0.0.0" }),
         ],
         (answer) =>
-          AppProbe.pluginAnswers(app.origin).pipe(
+          AppProbe.pluginAnswers(app, key).pipe(
             Effect.provide(answering(answer)),
           ),
       );
-      expect(answers).toEqual([true, false, false]);
+      expect(answers).toEqual([
+        "sees-session",
+        "other-session",
+        "other-session",
+        "refused",
+        "missing",
+        "missing",
+        "missing",
+      ]);
+    }),
+  );
+
+  it.effect("asks the relay at the app's origin, naming that origin", () =>
+    Effect.gen(function* () {
+      const asked: string[] = [];
+      yield* AppProbe.pluginAnswers(app, key).pipe(
+        Effect.provide(
+          Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.make((request) =>
+              Effect.sync(() => {
+                asked.push(request.url);
+                return HttpClientResponse.fromWeb(
+                  request,
+                  new Response(JSON.stringify({ session: null })),
+                );
+              }),
+            ),
+          ),
+        ),
+      );
+      expect(asked).toEqual([
+        "http://localhost:5173/__intervu/session?origin=http%3A%2F%2Flocalhost%3A5173",
+      ]);
     }),
   );
 });

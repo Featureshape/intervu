@@ -75,6 +75,13 @@ export const reloadAppUrl = `http://localhost:${reloadAppPort}`;
 export const commandsAppPort = 52001;
 export const commandsAppUrl = `http://localhost:${commandsAppPort}`;
 
+/**
+ * The same fixture app with the React Compiler's Babel pass on
+ * (`vite.compiler.config.ts`), wired to the harness daemon.
+ */
+export const compilerAppPort = 52015;
+export const compilerAppUrl = `http://localhost:${compilerAppPort}`;
+
 /** A port no app listens on, for `intervu <url>` to find nothing at. */
 export const unreachableAppUrl = "http://localhost:51996";
 

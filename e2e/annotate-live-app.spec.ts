@@ -16,7 +16,7 @@ import { fixtureAppDir, fixtureAppUrl } from "./support.ts";
  * behaves natively; armed, a click becomes an annotation instead of driving the
  * app. A sent annotation reaches `poll <url>` carrying the JSX `file:line:col`
  * of the element the app's own code rendered, and the page it was made on; a
- * click inside a third-party component reports the nearest app-code element.
+ * click inside a third-party component reports the app's call of that component.
  * Selectors and the DOM snapshot carry nothing of intervu's, and annotations
  * from different routes of the app share the origin's one Session.
  *
@@ -148,12 +148,12 @@ test("a sent annotation reaches poll with its JSX source and page URL", async ({
   });
 });
 
-test("a click inside a third-party component reports the nearest app-code element", async ({
+test("a click inside a third-party component reports the app's call of that component", async ({
   page,
 }) => {
   await openFreshSession();
   await loadPanel(page, fixtureAppUrl);
-  // The widget's own elements carry no stamp; the app's wrapper does.
+  // The widget's own elements carry no stamp; the app's call of it does.
   await expect(page.locator("#widget-label")).not.toHaveAttribute(
     "data-intervu-src",
     /.*/,
@@ -169,7 +169,7 @@ test("a click inside a third-party component reports the nearest app-code elemen
       {
         tag: "span",
         text: "Third-party widget",
-        source: jsxLocation('<section id="widget-slot">'),
+        source: jsxLocation("<FixtureWidget />"),
         pageUrl: `${fixtureAppUrl}/`,
       },
     ],
