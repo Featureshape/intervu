@@ -4,11 +4,12 @@ import { jsxSourcePlugin } from "./jsxSource.ts";
 import { loadOverlayJs } from "./overlayAsset.ts";
 import {
   answerSessionLookup,
+  describeRejection,
   guardInputOf,
   guardRequest,
   isRelayedRoute,
-  ownOriginOf,
   ownSessionRouteKey,
+  relayTargetOf,
   relayToDaemon,
   relayToOwnSession,
   sendError,
@@ -50,22 +51,31 @@ const overlayPlugin = (): Plugin => ({
     const allowedHosts = server.config.server.allowedHosts;
     // Built once per dev server start; every page load awaits the same build.
     const overlay = loadOverlayJs();
+    const warnOnce = onceLogger((message) =>
+      server.config.logger.warn(message, { timestamp: true }),
+    );
 
     server.middlewares.use(relayPrefix, (request, response) => {
-      const guardInput = guardInputOf(request, { https, allowedHosts });
-      const rejection = guardRequest(guardInput);
-      if (rejection !== null) {
+      const method = request.method ?? "GET";
+      const { path, pageOrigin } = relayTargetOf(request.url ?? "/");
+      const guardInput = guardInputOf(request, pageOrigin, {
+        https,
+        allowedHosts,
+      });
+      const verdict = guardRequest(guardInput);
+      if (!verdict.pass) {
+        warnOnce(
+          describeRejection(method, path, verdict.rejection, guardInput),
+        );
         sendError(
           response,
           403,
           "ForeignOrigin",
-          `intervu only answers the dev server's own origin (${rejection})`,
+          `intervu only answers the dev server's own origin (${verdict.rejection})`,
         );
         return;
       }
 
-      const method = request.method ?? "GET";
-      const path = request.url ?? "/";
       if (method === "GET" && path === overlayPath) {
         overlay.then((build) => {
           if (build.ok) {
@@ -83,7 +93,7 @@ const overlayPlugin = (): Plugin => ({
       }
 
       if (method === "GET" && path === sessionPath) {
-        answerSessionLookup(response, port, ownOriginOf(guardInput));
+        answerSessionLookup(response, port, verdict.pageOrigin);
         return;
       }
 
@@ -93,9 +103,10 @@ const overlayPlugin = (): Plugin => ({
           request,
           response,
           port,
-          ownOriginOf(guardInput),
+          verdict.pageOrigin,
           key,
           path,
+          warnOnce,
         );
         return;
       }
@@ -126,5 +137,25 @@ const overlayPlugin = (): Plugin => ({
     ];
   },
 });
+
+/** How many distinct warnings one dev server prints before it stops. */
+const warningLimit = 50;
+
+/**
+ * Wrap `log` so each distinct message prints once: the dormant badge asks the
+ * relay every second, and a refusal should be one line in the terminal, not a
+ * line a second. Past `warningLimit` distinct messages it goes quiet, so a
+ * client spraying varied requests cannot flood the log.
+ */
+const onceLogger = (log: (message: string) => void) => {
+  const seen = new Set<string>();
+  return (message: string): void => {
+    if (seen.has(message) || seen.size >= warningLimit) {
+      return;
+    }
+    seen.add(message);
+    log(message);
+  };
+};
 
 export default intervu;

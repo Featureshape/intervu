@@ -9,13 +9,14 @@ import {
   roleLabel,
 } from "../sdk/liveFrame.ts";
 import type { Annotation } from "../sdk/protocol.ts";
-import { sourceAttribute } from "../vite/jsxSource.ts";
+import { sourceAttribute, sourceRegistryKey } from "../vite/jsxSource.ts";
 import {
   ownMarkupAttribute,
   relayPrefix,
   sessionPath,
 } from "../vite/relayPaths.ts";
 import { openSessionKeyIn } from "../vite/sessionAnswer.ts";
+import { trimSnapshot } from "./snapshot.ts";
 import {
   readDraft,
   readPosition,
@@ -343,6 +344,15 @@ const STYLES = `
     background: #ffffff;
   }
   .composer[hidden] { display: none; }
+  .send-status {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+  .send-status[hidden] { display: none; }
+  .send-status[data-tone="error"] { color: #b42318; }
+  .send-status[data-tone="warning"] { color: #6b6b76; }
   .ended-note {
     flex: none;
     margin: 0;
@@ -403,8 +413,14 @@ const STYLES = `
   .button.primary:disabled:hover { background: #1a1a1f; }
 `;
 
-/** The relay route the overlay asks whether a Session is open for its origin. */
-const sessionLookupPath = `${relayPrefix}${sessionPath}`;
+/**
+ * The relay URL of `path`, naming the page's own origin. The browser's
+ * `location.origin` is the one origin that stays right when a proxy in front of
+ * the dev server terminates TLS or changes the port, so the relay looks the
+ * Session up by it rather than by what the dev server sees.
+ */
+const relayUrl = (path: string): string =>
+  `${relayPrefix}${path}?${new URLSearchParams({ origin: window.location.origin })}`;
 
 /**
  * The tab's `sessionStorage`, read on each use: a browser that refuses storage
@@ -428,7 +444,7 @@ const openCommand = (): string => `intervu ${window.location.origin}`;
  */
 const lookupOpenSession = async (): Promise<string | null> => {
   try {
-    const response = await fetch(sessionLookupPath, { cache: "no-store" });
+    const response = await fetch(relayUrl(sessionPath), { cache: "no-store" });
     return response.ok ? openSessionKeyIn(await response.json()) : null;
   } catch {
     return null;
@@ -620,12 +636,29 @@ const fiberOf = (node: Element): unknown => {
 };
 
 /**
- * The JSX source of the nearest element above `anchor` the app's code wrote.
- * It walks React's own tree first, so content a third-party component portals
- * to `<body>` still names the app element that renders that component; the
- * DOM's ancestors answer for anything React did not render.
+ * The call sites the app's JSX gave its component elements, keyed by the
+ * element's props object, as the plugin's `jsxDEV` wrapper records them; a
+ * fiber's `memoizedProps` is that same object.
+ */
+const componentSources = (): WeakMap<object, string> | null => {
+  const registry: unknown = Reflect.get(
+    globalThis,
+    Symbol.for(sourceRegistryKey),
+  );
+  return registry instanceof WeakMap ? registry : null;
+};
+
+/**
+ * The JSX source of the nearest element above `anchor` the app's code wrote:
+ * an intrinsic element's own `data-intervu-src`, or the call site of a
+ * component element. It walks React's own tree, from `anchor` up through the
+ * fibers that rendered it, so an `<h1>` a third-party `<PageHeader>` renders
+ * names the app's `<PageHeader>` call, and content a third-party component
+ * portals to `<body>` still names the app element that renders that component.
+ * The DOM's ancestors answer for anything React did not render.
  */
 const sourceOf = (anchor: Element): string | null => {
+  const registry = componentSources();
   let fiber = fiberOf(anchor);
   while (hasField(fiber, "memoizedProps")) {
     const props = fiber.memoizedProps;
@@ -634,6 +667,13 @@ const sourceOf = (anchor: Element): string | null => {
       typeof props[sourceAttribute] === "string"
     ) {
       return props[sourceAttribute];
+    }
+    const callSite =
+      typeof props === "object" && props !== null
+        ? registry?.get(props)
+        : undefined;
+    if (callSite !== undefined) {
+      return callSite;
     }
     fiber = hasField(fiber, "return") ? fiber.return : null;
   }
@@ -653,33 +693,110 @@ const toWire = ({ annotation, source, pageUrl }: AppAnnotation) => ({
 /**
  * The app's DOM as the human sees it, without intervu: the overlay's host, the
  * annotation markers' host and the plugin's overlay script are dropped from a
- * copy, so the snapshot the agent reads is the app's own markup.
+ * copy, so the snapshot the agent reads is the app's own markup, and the copy
+ * is trimmed to what an agent reads (`./snapshot.ts`).
  */
 const appSnapshot = (): string => {
   const copy = document.importNode(document.documentElement, true);
   for (const own of copy.querySelectorAll(`[${ownMarkupAttribute}]`)) {
     own.remove();
   }
+  trimSnapshot(copy);
   return copy.outerHTML;
 };
 
-/** Post one Feedback to the Session through the relay; whether it queued. */
-const postFeedback = (
+/** How much of a failed response's body the panel shows. */
+const failureDetailLimit = 160;
+
+/**
+ * Why a send failed, as the panel shows it: the HTTP status and the start of
+ * the answer - the relay's or daemon's `{error:{message}}`, or the text a proxy
+ * answered with, tags stripped.
+ */
+const failureOf = async (response: Response): Promise<string> => {
+  const text = await response.text().catch(() => "");
+  let detail = text;
+  try {
+    const body: unknown = JSON.parse(text);
+    if (
+      hasField(body, "error") &&
+      hasField(body.error, "message") &&
+      typeof body.error.message === "string"
+    ) {
+      detail = body.error.message;
+    }
+  } catch {
+    detail = text.replace(/<[^>]*>/g, " ");
+  }
+  detail = detail.replace(/\s+/g, " ").trim();
+  const status = `HTTP ${response.status}${response.statusText === "" ? "" : ` ${response.statusText}`}`;
+  if (detail === "") {
+    return status;
+  }
+  return `${status}: ${detail.length > failureDetailLimit ? `${detail.slice(0, failureDetailLimit - 1)}…` : detail}`;
+};
+
+/** How one attempt to post a Feedback went. */
+type PostAttempt =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly failure: string };
+
+/** Post one Feedback body to the Session through the relay. */
+const postOnce = (key: string, body: string): Promise<PostAttempt> =>
+  fetch(relayUrl(`/s/${key}/feedback`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body,
+  })
+    .then(
+      async (response): Promise<PostAttempt> =>
+        response.ok
+          ? { ok: true }
+          : { ok: false, failure: await failureOf(response) },
+    )
+    .catch(
+      (error: unknown): PostAttempt => ({
+        ok: false,
+        failure: `network error${error instanceof TypeError && error.message !== "" ? `: ${error.message}` : ""}`,
+      }),
+    );
+
+/** How a send went, as the panel reports it. */
+type SendOutcome =
+  | { readonly kind: "sent" }
+  | { readonly kind: "sentWithoutSnapshot"; readonly failure: string }
+  | { readonly kind: "failed"; readonly failure: string };
+
+/** The snapshot an agent gets when the page's own could not be sent. */
+const missingSnapshot = (failure: string): string =>
+  `<!-- intervu: the page snapshot could not be sent with this Feedback (${failure.replace(/--/g, "- -")}) -->`;
+
+/**
+ * Post one Feedback to the Session through the relay. The DOM snapshot makes
+ * the body large, and a proxy in front of the dev server may refuse a body
+ * that large; then the Feedback goes again with a note in place of the
+ * snapshot, so the human's message and annotations still reach the agent.
+ */
+const postFeedback = async (
   key: string,
   message: string,
   annotations: readonly AppAnnotation[],
-): Promise<boolean> =>
-  fetch(`${relayPrefix}/s/${key}/feedback`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
+): Promise<SendOutcome> => {
+  const body = (domSnapshot: string): string =>
+    JSON.stringify({
       message,
       annotations: annotations.map(toWire),
-      domSnapshot: appSnapshot(),
-    }),
-  })
-    .then((response) => response.ok)
-    .catch(() => false);
+      domSnapshot,
+    });
+  const full = await postOnce(key, body(appSnapshot()));
+  if (full.ok) {
+    return { kind: "sent" };
+  }
+  const bare = await postOnce(key, body(missingSnapshot(full.failure)));
+  return bare.ok
+    ? { kind: "sentWithoutSnapshot", failure: full.failure }
+    : { kind: "failed", failure: full.failure };
+};
 
 /** A titled section of the panel body. */
 const section = (title: string, ...content: HTMLElement[]): HTMLElement => {
@@ -780,6 +897,18 @@ const reviewControls = (
   send.textContent = sendLabel;
   send.setAttribute("data-intervu-send", "");
 
+  // Why the last send failed, or went without its snapshot; hidden otherwise.
+  const sendStatus = document.createElement("p");
+  sendStatus.className = "send-status";
+  sendStatus.setAttribute("role", "status");
+  sendStatus.setAttribute("data-intervu-send-status", "");
+  sendStatus.hidden = true;
+  const report = (tone: "error" | "warning" | null, text: string): void => {
+    sendStatus.hidden = tone === null;
+    sendStatus.dataset.tone = tone ?? "";
+    sendStatus.textContent = text;
+  };
+
   const sync = (): void => {
     list.hidden = items.size === 0;
     empty.hidden = items.size > 0;
@@ -846,10 +975,18 @@ const reviewControls = (
     const message = input.value;
     send.disabled = true;
     send.textContent = "Sending...";
-    postFeedback(key, message, annotations).then((queued) => {
-      if (!queued) {
+    report(null, "");
+    postFeedback(key, message, annotations).then((outcome) => {
+      if (outcome.kind === "failed") {
+        report("error", `Send failed - ${outcome.failure}`);
         flash("Send failed");
         return;
+      }
+      if (outcome.kind === "sentWithoutSnapshot") {
+        report(
+          "warning",
+          `Sent without the page snapshot - ${outcome.failure}`,
+        );
       }
       // Only what was sent goes: an annotation made or a word typed while the
       // send was in flight stays pending.
@@ -878,7 +1015,7 @@ const reviewControls = (
   composer.className = "composer";
   composer.id = "intervu-panel-composer";
   composer.setAttribute("data-intervu-composer", "");
-  composer.append(input, actions);
+  composer.append(input, actions, sendStatus);
 
   // The Session ended: no more annotations or sends, and the app takes its
   // clicks back.
@@ -1053,7 +1190,7 @@ const renderPanel = (
 
   // The Session's SSE stream, through the relay. Vite's HMR reloads the app,
   // so the daemon sends it no artifact version.
-  followLiveFrames(`${relayPrefix}/s/${key}/events`, {
+  followLiveFrames(relayUrl(`/s/${key}/events`), {
     setPresence,
     appendConversation: conversation.append,
     reload: () => {},

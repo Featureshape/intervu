@@ -148,6 +148,27 @@ const openArtifact = Effect.fn("openArtifact")(function* (file: string) {
 });
 
 /**
+ * The help line of `intervu <url>`, from what the plugin's relay answered at
+ * `origin`: the next step when it sees the Session, else what to fix first.
+ */
+const pluginHelp = (
+  plugin: AppProbe.PluginAnswer,
+  origin: string,
+  next: string,
+): string => {
+  switch (plugin) {
+    case "sees-session":
+      return `review open - ${next}`;
+    case "refused":
+      return `review open, but the intervu Vite plugin at ${origin} refused the request as not from the dev server's own origin - the dev server's log names the header it rejected (behind a proxy, forward the browser's Host or X-Forwarded-Host and add the hostname to server.allowedHosts), then ${next}`;
+    case "other-session":
+      return `review open, but the intervu Vite plugin at ${origin} does not see it - the dev server reaches a different intervu daemon, or none; start the dev server with the same INTERVU_PORT as this shell, then ${next}`;
+    case "missing":
+      return `review open, but the intervu Vite plugin is missing at ${origin} - add \`import { intervu } from "intervu/vite"\` and \`intervu()\` to the plugins in vite.config.ts and restart the dev server, then ${next}`;
+  }
+};
+
+/**
  * `intervu open <url>` (and the bare-URL alias): URL mode (ADR 0022). Fail fast
  * with `AppUnreachable` when nothing answers at the URL; otherwise ensure the
  * daemon is up and open or resume the Session for the URL's origin, so every
@@ -167,7 +188,7 @@ const openApp = Effect.fn("openApp")(function* (
   yield* lifecycle.ensure;
   const session = yield* lifecycle.openSession(app.origin, "app");
   // Asked once the daemon is up: the plugin's relay forwards to it.
-  const pluginAnswers = yield* AppProbe.pluginAnswers(app.origin);
+  const plugin = yield* AppProbe.pluginAnswers(app, session.key);
 
   if (openTab) {
     yield* Browser.openTab(app.url, config.browser);
@@ -178,9 +199,7 @@ const openApp = Effect.fn("openApp")(function* (
     key: session.key,
     origin: session.path,
     status: session.status,
-    help: pluginAnswers
-      ? `review open - ${next}`
-      : `review open, but the intervu Vite plugin is missing at ${session.path} - add \`import { intervu } from "intervu/vite"\` and \`intervu()\` to the plugins in vite.config.ts and restart the dev server, then ${next}`,
+    help: pluginHelp(plugin, session.path, next),
   });
   yield* emit(yield* Toon.encode(view));
 });

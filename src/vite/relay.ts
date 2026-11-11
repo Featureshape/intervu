@@ -42,26 +42,47 @@ export interface GuardInput {
   readonly origin: string | undefined;
   /** The `Sec-Fetch-Site` header browsers attach to every request. */
   readonly secFetchSite: string | undefined;
+  /**
+   * The host a reverse proxy in front of the dev server says the browser used
+   * (`X-Forwarded-Host`, or `host=` in `Forwarded`), when one does.
+   */
+  readonly forwardedHost: string | undefined;
+  /**
+   * The scheme a reverse proxy says the browser used (`X-Forwarded-Proto`, or
+   * `proto=` in `Forwarded`), when one does.
+   */
+  readonly forwardedProto: string | undefined;
+  /**
+   * The page's own `location.origin`, which the overlay names in the `origin`
+   * query parameter of every relay request. It is the browser's side of the
+   * connection, so it stays right behind a TLS-terminating proxy, where the
+   * dev server only sees plain http.
+   */
+  readonly pageOrigin: string | undefined;
   /** Whether the dev server serves https. */
   readonly https: boolean;
   /** Vite's `server.allowedHosts`: extra hostnames the server answers to. */
   readonly allowedHosts: readonly string[] | true;
 }
 
-/** Why the guard turned a request away, or `null` when it may pass. */
+/** Why the guard turned a request away. */
 export type GuardRejection =
   | "foreign-host"
   | "foreign-origin"
+  | "foreign-page-origin"
   | "cross-site-fetch";
 
+/**
+ * The guard's verdict: a request that may pass, with the origin of the page
+ * that sent it, or the reason it was turned away.
+ */
+export type GuardVerdict =
+  | { readonly pass: true; readonly pageOrigin: string }
+  | { readonly pass: false; readonly rejection: GuardRejection };
+
 /** The hostname part of a `Host` header, without port or IPv6 brackets. */
-const hostnameOf = (host: string): string | null => {
-  try {
-    return new URL(`http://${host}`).hostname.replace(/^\[|\]$/g, "");
-  } catch {
-    return null;
-  }
-};
+const hostnameOf = (host: string): string | null =>
+  URL.parse(`http://${host}`)?.hostname.replace(/^\[|\]$/g, "") ?? null;
 
 /**
  * Whether `hostname` is one the dev server answers to without DNS rebinding
@@ -88,38 +109,159 @@ const isTrustedHostname = (
   );
 };
 
-/** The dev server's own origin, as a page that reached it via `Host` sees it. */
-export const ownOriginOf = (
-  input: Pick<GuardInput, "host" | "https">,
-): string => `${input.https ? "https" : "http"}://${input.host}`;
+/** The port `url` names, or its scheme's default when it names none. */
+const effectivePortOf = (url: URL): string =>
+  url.port !== "" ? url.port : url.protocol === "https:" ? "443" : "80";
 
 /**
- * Decide whether a request to the relay came from the dev server's own origin.
- *
- * Browsers mark cross-site requests with `Sec-Fetch-Site` and attach `Origin` to
- * every CORS-mode or non-GET request, so either header naming another origin is
- * a rejection. Requests carrying neither (the CLI, a same-origin GET) pass. The
- * `Host` check closes DNS rebinding, where a foreign name resolves to loopback
- * and `Origin` would otherwise match the forged `Host`.
+ * `origin` as an `http:` or `https:` URL, or `null` when it is not one (an
+ * opaque `null` origin, a `file:` page, garbage).
  */
-export const guardRequest = (input: GuardInput): GuardRejection | null => {
+const webOriginOf = (origin: string): URL | null => {
+  const parsed = URL.parse(origin);
+  return parsed !== null &&
+    (parsed.protocol === "http:" || parsed.protocol === "https:")
+    ? parsed
+    : null;
+};
+
+/**
+ * Whether `origin` is the address the browser used to reach this dev server:
+ * its hostname is one the server trusts, and its host and port are the `Host`
+ * the request arrived with, or the host a proxy in front forwarded. The scheme
+ * is left out on purpose: a TLS-terminating proxy turns the browser's https
+ * into plain http, and `Sec-Fetch-Site` already rejects a page on another
+ * scheme. A `Host` without a port takes the default of `origin`'s scheme, so
+ * `https://app.test` matches the `Host: app.test` a proxy sends.
+ */
+const isServerOrigin = (origin: URL, input: GuardInput): boolean => {
+  if (
+    !isTrustedHostname(
+      origin.hostname.replace(/^\[|\]$/g, ""),
+      input.allowedHosts,
+    )
+  ) {
+    return false;
+  }
+  return [input.host, input.forwardedHost].some((host) => {
+    if (host === undefined) {
+      return false;
+    }
+    const reached = URL.parse(`${origin.protocol}//${host}`);
+    return (
+      reached !== null &&
+      reached.hostname === origin.hostname &&
+      effectivePortOf(reached) === effectivePortOf(origin)
+    );
+  });
+};
+
+/**
+ * The page origin the dev server works out on its own, for a request that
+ * names none (the CLI, a same-origin GET): the scheme and host a proxy
+ * forwarded, else the server's own scheme and the `Host` header. Normalised the
+ * way `URL` does it, so `HTTP://App.Test:80` and `http://app.test` are one.
+ */
+const derivedOriginOf = (input: GuardInput, host: string): string => {
+  const scheme =
+    input.forwardedProto === "https" || input.forwardedProto === "http"
+      ? input.forwardedProto
+      : input.https
+        ? "https"
+        : "http";
+  const authority = input.forwardedHost ?? host;
+  return (
+    URL.parse(`${scheme}://${authority}`)?.origin ?? `${scheme}://${authority}`
+  );
+};
+
+/**
+ * Decide whether a request to the relay came from the dev server's own page,
+ * and if so, which origin that page is on.
+ *
+ * The `Host` check closes DNS rebinding, where a foreign name resolves to
+ * loopback. Browsers mark a request from another site with `Sec-Fetch-Site`,
+ * which is what keeps every other page out. An `Origin` header, and the page
+ * origin the overlay names, must each be an address this dev server answers
+ * to (`isServerOrigin`), and must agree when both are there. A request naming
+ * neither (the CLI, a same-origin GET from an older overlay) gets the origin
+ * the server derives from `Host` and any proxy headers.
+ */
+export const guardRequest = (input: GuardInput): GuardVerdict => {
   const hostname = input.host === undefined ? null : hostnameOf(input.host);
-  if (hostname === null || !isTrustedHostname(hostname, input.allowedHosts)) {
-    return "foreign-host";
+  if (
+    input.host === undefined ||
+    hostname === null ||
+    !isTrustedHostname(hostname, input.allowedHosts)
+  ) {
+    return { pass: false, rejection: "foreign-host" };
   }
   if (
     input.secFetchSite !== undefined &&
     input.secFetchSite !== "same-origin" &&
     input.secFetchSite !== "none"
   ) {
-    return "cross-site-fetch";
+    return { pass: false, rejection: "cross-site-fetch" };
   }
-  if (input.origin !== undefined) {
-    if (input.origin !== ownOriginOf(input)) {
-      return "foreign-origin";
-    }
+  const origin =
+    input.origin === undefined ? undefined : webOriginOf(input.origin);
+  if (
+    origin === null ||
+    (origin !== undefined && !isServerOrigin(origin, input))
+  ) {
+    return { pass: false, rejection: "foreign-origin" };
   }
-  return null;
+  const page =
+    input.pageOrigin === undefined ? undefined : webOriginOf(input.pageOrigin);
+  if (
+    page === null ||
+    (page !== undefined &&
+      (!isServerOrigin(page, input) ||
+        (origin !== undefined && origin.origin !== page.origin)))
+  ) {
+    return { pass: false, rejection: "foreign-page-origin" };
+  }
+  return {
+    pass: true,
+    pageOrigin:
+      page?.origin ?? origin?.origin ?? derivedOriginOf(input, input.host),
+  };
+};
+
+/** What each rejection means, for the dev server's log. */
+const rejectionReasons: Record<GuardRejection, string> = {
+  "foreign-host":
+    "its Host is not a name this dev server trusts - add the hostname to server.allowedHosts in vite.config.ts",
+  "cross-site-fetch":
+    "the browser marked it as sent from another site (Sec-Fetch-Site)",
+  "foreign-origin":
+    "its Origin is not an address this dev server answers to - behind a proxy, forward the browser's Host (or X-Forwarded-Host) and add the hostname to server.allowedHosts",
+  "foreign-page-origin":
+    "the page origin the overlay named is not an address this dev server answers to - behind a proxy, forward the browser's Host (or X-Forwarded-Host) and add the hostname to server.allowedHosts",
+};
+
+/**
+ * One log line that says why the guard refused a request and what it saw, so
+ * a refusal behind a proxy explains itself in the dev server's terminal.
+ */
+export const describeRejection = (
+  method: string,
+  path: string,
+  rejection: GuardRejection,
+  input: GuardInput,
+): string => {
+  const seen = [
+    ["Host", input.host],
+    ["Origin", input.origin],
+    ["page origin", input.pageOrigin],
+    ["Sec-Fetch-Site", input.secFetchSite],
+    ["forwarded host", input.forwardedHost],
+    ["forwarded proto", input.forwardedProto],
+  ]
+    .filter(([, value]) => value !== undefined)
+    .map(([name, value]) => `${name}: ${value}`)
+    .join(", ");
+  return `[intervu] refused ${method} ${relayPrefix}${path}: ${rejectionReasons[rejection]} (${seen === "" ? "no Host" : seen})`;
 };
 
 /**
@@ -168,20 +310,76 @@ const headerOf = (
   return Array.isArray(value) ? value[0] : value;
 };
 
+/** The first value of a comma-separated header such as `X-Forwarded-Host`. */
+const firstValueOf = (value: string | undefined): string | undefined => {
+  const first = value?.split(",")[0]?.trim();
+  return first === undefined || first === "" ? undefined : first;
+};
+
+/**
+ * The `name=` parameter of the first element of an RFC 7239 `Forwarded`
+ * header, unquoted, or `undefined` when it has none.
+ */
+export const forwardedParamOf = (
+  forwarded: string | undefined,
+  name: "host" | "proto",
+): string | undefined => {
+  const first = forwarded?.split(",")[0];
+  for (const pair of first?.split(";") ?? []) {
+    const [key, ...rest] = pair.split("=");
+    if (key?.trim().toLowerCase() === name) {
+      const value = rest
+        .join("=")
+        .trim()
+        .replace(/^"(.*)"$/, "$1");
+      return value === "" ? undefined : value;
+    }
+  }
+  return undefined;
+};
+
+/** A relay request's path, split from the page origin its query names. */
+export interface RelayTarget {
+  /** The relay path without its query, as the daemon routes see it. */
+  readonly path: string;
+  /** The `origin` query parameter, the page's own `location.origin`. */
+  readonly pageOrigin: string | undefined;
+}
+
+/** Split a relay request's URL into its path and the page origin it names. */
+export const relayTargetOf = (url: string): RelayTarget => {
+  const parsed = URL.parse(url, "http://relay.invalid");
+  return {
+    path: parsed?.pathname ?? url,
+    pageOrigin: parsed?.searchParams.get("origin") ?? undefined,
+  };
+};
+
 /** Read the guard's input off a live request. */
 export const guardInputOf = (
   request: http.IncomingMessage,
+  pageOrigin: string | undefined,
   server: {
     readonly https: boolean;
     readonly allowedHosts: readonly string[] | true;
   },
-): GuardInput => ({
-  host: headerOf(request, "host"),
-  origin: headerOf(request, "origin"),
-  secFetchSite: headerOf(request, "sec-fetch-site"),
-  https: server.https,
-  allowedHosts: server.allowedHosts,
-});
+): GuardInput => {
+  const forwarded = headerOf(request, "forwarded");
+  return {
+    host: headerOf(request, "host"),
+    origin: headerOf(request, "origin"),
+    secFetchSite: headerOf(request, "sec-fetch-site"),
+    forwardedHost:
+      firstValueOf(headerOf(request, "x-forwarded-host")) ??
+      forwardedParamOf(forwarded, "host"),
+    forwardedProto:
+      firstValueOf(headerOf(request, "x-forwarded-proto"))?.toLowerCase() ??
+      forwardedParamOf(forwarded, "proto")?.toLowerCase(),
+    pageOrigin,
+    https: server.https,
+    allowedHosts: server.allowedHosts,
+  };
+};
 
 /** The tags of the errors the relay answers with. */
 export type RelayErrorTag =
@@ -345,7 +543,7 @@ export const answerSessionLookup = (
  * Forward a Session-scoped request for `key` to the daemon as `path`, but only
  * when `key` is the Session open for `origin`, the page's own; any other key,
  * or no open Session, is a `404 RouteNotRelayed`, the same as a route the relay
- * does not know.
+ * does not know, and a line through `warn` for the dev server's log.
  */
 export const relayToOwnSession = (
   request: http.IncomingMessage,
@@ -354,12 +552,16 @@ export const relayToOwnSession = (
   origin: string,
   key: string,
   path: string,
+  warn: (message: string) => void,
 ): void => {
   lookupSession(port, origin, closeSignalOf(response)).then((answer) => {
     if (response.headersSent || response.destroyed) {
       return;
     }
     if (answer === null || openSessionKeyOf(answer) !== key) {
+      warn(
+        `[intervu] refused ${request.method ?? "GET"} ${relayPrefix}${path}: Session ${key} is not the Session open for the page origin ${origin}`,
+      );
       sendError(
         response,
         404,

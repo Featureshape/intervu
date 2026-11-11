@@ -134,6 +134,13 @@ const sessionDaemon = (session: unknown): Promise<number> =>
     });
   });
 
+/** What the relay under test logged, one entry per warning. */
+const warnings: string[] = [];
+
+afterEach(() => {
+  warnings.length = 0;
+});
+
 /** POST `body` through a relay wired to `daemonPort` as `key`'s feedback. */
 const postFeedback = async (
   daemonPort: number,
@@ -148,6 +155,7 @@ const postFeedback = async (
       "http://localhost:5173",
       key,
       path,
+      (message) => warnings.push(message),
     ),
   );
   const response = await fetch(`http://127.0.0.1:${relayPort}${path}`, {
@@ -171,14 +179,18 @@ describe("relayToOwnSession", () => {
         body: '{"message":"hi"}',
       },
     });
+    expect(warnings).toEqual([]);
   });
 
-  it("refuses another Session's key", async () => {
+  it("refuses another Session's key, and says so in the log", async () => {
     const daemonPort = await sessionDaemon({ key: ownKey, status: "open" });
     expect(await postFeedback(daemonPort, "fedcba9876543210")).toMatchObject({
       status: 404,
       body: { error: { tag: "RouteNotRelayed" } },
     });
+    expect(warnings).toEqual([
+      "[intervu] refused POST /__intervu/s/fedcba9876543210/feedback: Session fedcba9876543210 is not the Session open for the page origin http://localhost:5173",
+    ]);
   });
 
   it("refuses the origin's Session once it has ended", async () => {

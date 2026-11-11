@@ -61,6 +61,7 @@
     "changeset:publish": "bun run build && changeset publish"
   },
   "devDependencies": {
+    "@babel/core": "^8.1.0",
     "@biomejs/biome": "2.5.1",
     "@changesets/cli": "^2.31.0",
     "@effect/platform-bun": "4.0.0-beta.91",
@@ -68,6 +69,7 @@
     "@effect/vitest": "4.0.0-beta.91",
     "@medv/finder": "^4.0.2",
     "@playwright/test": "^1.61.1",
+    "@rolldown/plugin-babel": "^0.3.1",
     "@tailwindcss/cli": "^4",
     "@toon-format/toon": "^2.3.0",
     "@types/bun": "latest",
@@ -75,6 +77,7 @@
     "@types/react-dom": "^19",
     "@typescript/native-preview": "^7.0.0-dev.20260628.1",
     "@vitejs/plugin-react": "^6",
+    "babel-plugin-react-compiler": "^1.0.0",
     "effect": "4.0.0-beta.91",
     "happy-dom": "^20.10.6",
     "react": "^19",

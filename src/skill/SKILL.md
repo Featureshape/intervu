@@ -70,7 +70,7 @@ With the plugin in place and no review open, the app shows a small "intervu: no 
 ### Open a review on the app's URL
 
 1. **Open or resume the Session.**
-   Run `intervu http://localhost:5173` with the URL the dev server prints.
+   Run `intervu http://localhost:5173` with the URL the dev server prints, or the URL the human has open in the browser when a proxy fronts the dev server, such as `https://app.example.com`.
    The human must already be running the dev server; intervu attaches to it and never starts it.
    The Session is keyed by the URL's origin, so running it again from any route of the same app resumes the same Session.
    No browser tab opens: within a couple of seconds intervu's floating panel replaces the badge in every tab the human has open on that origin.
@@ -80,19 +80,24 @@ With the plugin in place and no review open, the app shows a small "intervu: no 
 3. **Edit the app's source.**
    Vite's hot reload updates the human's view, and the panel keeps the Conversation and any unsent annotations.
 
-Two outcomes of `intervu <url>` need action from you:
+These outcomes of `intervu <url>` need action from you:
 
 - **`AppUnreachable`** - nothing answered at the URL, and no Session was opened.
   Ask the human to start the dev server, or check the port, then run the command again.
 - **A help line saying the Vite plugin is missing** - the Session is open, but the page cannot show the panel.
   Add `intervu()` as shown above and ask the human to restart the dev server; the Session stays open meanwhile.
+- **A help line saying the plugin refused the request** - usually a proxy in front of the dev server.
+  The dev server's terminal has an `[intervu] refused` line naming the header it rejected.
+  The proxy must pass the browser's `Host` (or `X-Forwarded-Host`), and the hostname must be in `server.allowedHosts` in `vite.config.ts`.
+- **A help line saying the plugin does not see the Session** - the dev server reaches a different intervu daemon, or none.
+  Ask the human to start the dev server with the same `INTERVU_PORT` as your shell.
 
 ### What `source` and `pageUrl` mean
 
 In URL mode each annotation in a Feedback carries two more fields:
 
 - **`source`** - the `file:line:col` of the JSX element in the app's own code that rendered what the human clicked, such as `/repo/src/App.tsx:42:7`.
-  If the click landed inside a component from `node_modules`, `source` names the nearest enclosing element written in the app's code, so it always points at a file you can edit.
+  If the click landed inside a component from `node_modules`, `source` names the place in the app's code that renders that component, such as its `<PageHeader ...>` call, so it always points at a file you can edit.
   Open that file at that line first; it is usually the place to change.
   It can be missing when no app element encloses the click, so fall back to the selector, text and snapshot then.
 - **`pageUrl`** - the full URL of the page the human was on when they made the annotation, such as `http://localhost:5173/settings?tab=profile`.

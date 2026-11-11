@@ -3,6 +3,8 @@ import { defineConfig, devices } from "@playwright/test";
 import {
   commandsAppPort,
   commandsAppUrl,
+  compilerAppPort,
+  compilerAppUrl,
   conversationAppPort,
   conversationAppUrl,
   daemonPort,
@@ -38,8 +40,8 @@ import {
  * URL mode is proven against the fixture Vite + React app (`e2e/fixtures/app`),
  * served on Node with the `intervu/vite` plugin loaded from source: five times
  * wired to the harness daemon (four instances for specs that end their Session
- * or count its Conversation), once to a port no daemon listens on, and once
- * without the plugin at all. The previous Vite major serves the same app from
+ * or count its Conversation), once more with the React Compiler on, once to a
+ * port no daemon listens on, and once without the plugin at all. The previous Vite major serves the same app from
  * its own package (`e2e/fixtures/app-previous-vite`), installed from its own
  * lockfile before it starts. It is not a workspace of the root package: a root
  * `workspaces` field makes changesets treat the repo as a monorepo and refuse to
@@ -119,6 +121,14 @@ export default defineConfig({
       port: noDaemonAppPort,
       url: noDaemonAppUrl,
       daemonPort: unusedDaemonPort,
+    }),
+    fixtureApp({
+      bin: viteBin,
+      dir: fixtureAppDir,
+      config: "vite.compiler.config.ts",
+      port: compilerAppPort,
+      url: compilerAppUrl,
+      daemonPort,
     }),
     fixtureApp({
       bin: viteBin,
