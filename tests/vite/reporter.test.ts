@@ -148,30 +148,30 @@ const listen = (handler: http.RequestListener): Promise<number> =>
 describe("sendPluginReport", () => {
   it("POSTs the body to the report route on every port given", async () => {
     const taken: { path: string | undefined; body: string }[] = [];
+    let reportTaken: () => void = () => {};
     const received = new Promise<void>((resolve) => {
-      let pending = 2;
-      const daemon: http.RequestListener = (request, response) => {
-        const chunks: Buffer[] = [];
-        request.on("data", (chunk: Buffer) => chunks.push(chunk));
-        request.on("end", () => {
-          taken.push({
-            path: request.url,
-            body: Buffer.concat(chunks).toString("utf8"),
-          });
-          response.writeHead(200, { "content-type": "application/json" });
-          response.end('{"ok":true}');
-          pending -= 1;
-          if (pending === 0) {
-            resolve();
-          }
-        });
-      };
-      void (async () => {
-        const first = await listen(daemon);
-        const second = await listen(daemon);
-        sendPluginReport([first, second], '{"origin":"http://x"}');
-      })();
+      reportTaken = resolve;
     });
+    let pending = 2;
+    const daemon: http.RequestListener = (request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        taken.push({
+          path: request.url,
+          body: Buffer.concat(chunks).toString("utf8"),
+        });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end('{"ok":true}');
+        pending -= 1;
+        if (pending === 0) {
+          reportTaken();
+        }
+      });
+    };
+    const first = await listen(daemon);
+    const second = await listen(daemon);
+    sendPluginReport([first, second], '{"origin":"http://x"}');
     await received;
     expect(taken).toEqual([
       { path: pluginReportPath, body: '{"origin":"http://x"}' },
