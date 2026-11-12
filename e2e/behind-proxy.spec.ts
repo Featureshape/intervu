@@ -197,6 +197,10 @@ test("the 403 body names the reason and echoes only what the request presented",
 test("when its proxy stops forwarding the browser's Host, the badge names the refusal", async ({
   page,
 }) => {
+  // Start from no open Session: an earlier suite run may have left one
+  // persisted for this origin, which would show the panel, not the badge.
+  await runCli(["end", swappedAppUrl], browserRecorder());
+
   // The tab loads through a well-configured proxy: the overlay comes up and
   // rests as the dormant badge (no Session is open for this origin).
   swappedProxy = await startHttpsProxy({

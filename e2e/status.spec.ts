@@ -5,6 +5,7 @@ import {
   daemonStateDir,
   fixtureAppPort,
   fixtureAppUrl,
+  noPluginAppUrl,
 } from "./support.ts";
 
 /**
@@ -81,5 +82,43 @@ test("a refused request shows up as a refusal tally with its reason", async ({
   expect(fieldOf(tally ?? null, "reason")).toBe("foreign-origin");
   expect(fieldOf(tally ?? null, "plugin")).toBe(
     `http://localhost:${fixtureAppPort}`,
+  );
+});
+
+/** An origin no Session will ever be opened for, unique to this spec. */
+const waitingOrigin = "http://waiting.example:4173";
+
+test("lookups that find no Session show up as a waiting origin", async ({
+  request,
+}) => {
+  for (let asked = 0; asked < 2; asked += 1) {
+    const lookup = await request.get("/apps/session", {
+      params: { origin: waitingOrigin },
+    });
+    expect(lookup.status()).toBe(200);
+  }
+
+  const waiting = fieldOf(await statusOutput(), "waitingOrigins");
+  const row = (Array.isArray(waiting) ? waiting : []).find(
+    (entry) => fieldOf(entry, "origin") === waitingOrigin,
+  );
+  expect(row).toBeDefined();
+  expect(Number(fieldOf(row ?? null, "count"))).toBeGreaterThanOrEqual(2);
+  expect(typeof fieldOf(row ?? null, "lastSeenAt")).toBe("string");
+});
+
+test("opening another origin prints the did-you-mean line for a waiting browser", async ({
+  request,
+}) => {
+  // Freshen the waiting origin the way a polling tab would.
+  await request.get("/apps/session", { params: { origin: waitingOrigin } });
+
+  const run = await runCli([noPluginAppUrl], browserRecorder());
+  expect(run.exitCode).toBe(0);
+  // Concurrent specs may hold their own waiting origins, so the line may
+  // name any of them - its shape is the contract.
+  const line = String(fieldOf(run.output, "didYouMean"));
+  expect(line).toMatch(
+    /^a browser at \S+ is looking for a session - did you mean 'intervu \S+'\?$/,
   );
 });

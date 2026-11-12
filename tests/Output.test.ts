@@ -76,6 +76,36 @@ describe("Output.appSession", () => {
       help: "next",
     });
   });
+
+  it("slots the warning and the did-you-mean line before help, only when present", () => {
+    const view = Output.appSession({
+      help: "next",
+      didYouMean: "did you mean 'intervu https://app.test'?",
+      warning: "http://app.test:443 is an origin no browser will report",
+      status: "open",
+      origin: "http://app.test:443",
+      key: "abc",
+    });
+
+    expect(Object.keys(view)).toEqual([
+      "key",
+      "origin",
+      "status",
+      "warning",
+      "didYouMean",
+      "help",
+    ]);
+    const bare = Output.appSession({
+      key: "abc",
+      origin: "http://localhost:5173",
+      status: "open",
+      warning: undefined,
+      didYouMean: undefined,
+      help: "next",
+    });
+    expect("warning" in bare).toBe(false);
+    expect("didYouMean" in bare).toBe(false);
+  });
 });
 
 describe("Output.error", () => {
@@ -371,6 +401,13 @@ describe("Output.status", () => {
           lastSeenAt: 1_700_000_060_000,
         },
       ],
+      waitingOrigins: [
+        {
+          origin: "https://app.test:8443",
+          count: 41,
+          lastSeenAt: 1_700_000_050_000,
+        },
+      ],
     });
 
     expect(Object.keys(view)).toEqual([
@@ -380,7 +417,15 @@ describe("Output.status", () => {
       "sessions",
       "plugins",
       "refusals",
+      "waitingOrigins",
       "help",
+    ]);
+    expect(view.waitingOrigins).toEqual([
+      {
+        origin: "https://app.test:8443",
+        count: 41,
+        lastSeenAt: "2023-11-14T22:14:10.000Z",
+      },
     ]);
     expect(view.sessions).toEqual([
       {

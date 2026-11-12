@@ -45,6 +45,7 @@ import {
 } from "./SessionHub.ts";
 import { SessionStore } from "./SessionStore.ts";
 import * as Sse from "./Sse.ts";
+import { isWebOrigin, WaitingOrigins } from "./WaitingOrigins.ts";
 
 /**
  * The daemon's HTTP surface (issues #3, #4). Routes are total - each handler
@@ -138,10 +139,21 @@ const appSessionRoute = HttpRouter.add(
   appSessionPath,
   Effect.gen(function* () {
     const store = yield* SessionStore;
+    const waiting = yield* WaitingOrigins;
     const query =
       yield* HttpServerRequest.schemaSearchParams(AppSessionRequest);
     const session = yield* store.getByPath(query.origin);
     const app = Option.filter(session, (found) => found.kind === "app");
+    // The waiting-origin memory rides the lookups that already happen: a
+    // `session: null` answer for a web origin records it as waiting, and a
+    // lookup that finds its open Session clears it. Non-origin queries (an
+    // artifact path, a stray client) are never worth remembering.
+    yield* Option.match(app, {
+      onNone: () =>
+        isWebOrigin(query.origin) ? waiting.miss(query.origin) : Effect.void,
+      onSome: (found) =>
+        found.status === "open" ? waiting.found(query.origin) : Effect.void,
+    });
     return HttpServerResponse.jsonUnsafe(
       AppSessionResponse.make({
         session: Option.match(app, {
@@ -200,6 +212,7 @@ const statusRoute = HttpRouter.add(
     const store = yield* SessionStore;
     const hub = yield* SessionHub;
     const registry = yield* PluginRegistry;
+    const waiting = yield* WaitingOrigins;
     const sessions = yield* store.list;
     const withPresence = yield* Effect.forEach(sessions, (session) =>
       hub.presence(session.key).pipe(
@@ -215,6 +228,7 @@ const statusRoute = HttpRouter.add(
       ),
     );
     const plugins = yield* registry.sightings;
+    const waitingOrigins = yield* waiting.list;
     return yield* HttpServerResponse.schemaJson(StatusResponse)(
       StatusResponse.make({
         version: config.version,
@@ -222,6 +236,7 @@ const statusRoute = HttpRouter.add(
         stateDir: config.stateDir,
         sessions: withPresence,
         plugins,
+        waitingOrigins,
       }),
     );
   }).pipe(

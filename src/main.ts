@@ -34,6 +34,7 @@ import { Setup } from "./Setup.ts";
 import { SkillAsset } from "./SkillAsset.ts";
 import { SnapshotFiles } from "./SnapshotFiles.ts";
 import * as Toon from "./Toon.ts";
+import { WaitingOrigins, waitingElsewhere } from "./WaitingOrigins.ts";
 
 const bin = "intervu";
 const description =
@@ -234,30 +235,46 @@ const openApp = Effect.fn("openApp")(function* (
     yield* Browser.openTab(app.url, config.browser);
   }
 
+  // One best-effort status read serves both enrichments below: a daemon that
+  // cannot answer it just leaves the probe's own answer standing.
+  const daemonStatus = yield* lifecycle.status.pipe(
+    Effect.map(Option.some),
+    Effect.orElseSucceed(() => Option.none<StatusResponse>()),
+  );
+  const now = yield* Clock.currentTimeMillis;
+
   // A probe a sandbox or proxy blocks reads `missing` or `refused` even while
   // the plugin is alive; a fresh plugin-report held by the daemon outranks it.
   const sighting =
     plugin === "missing" || plugin === "refused"
-      ? yield* Effect.gen(function* () {
-          const daemon = yield* lifecycle.status;
-          const now = yield* Clock.currentTimeMillis;
-          return Option.fromNullishOr(
+      ? Option.flatMap(daemonStatus, (daemon) =>
+          Option.fromNullishOr(
             sightingCovering(daemon.plugins, app.origin, now),
-          );
-        }).pipe(
-          // Best-effort enrichment: a daemon that cannot answer status falls
-          // back to the probe's own answer rather than failing the open.
-          Effect.orElseSucceed(() =>
-            Option.none<{ readonly origin: string }>(),
           ),
         )
       : Option.none<{ readonly origin: string }>();
+
+  // A browser polling some other origin for a Session that is not there,
+  // while this open names none of them, is usually the agent opening the
+  // wrong origin - say so (behaviour: waiting origins, did-you-mean).
+  const didYouMean = Option.flatMap(daemonStatus, (daemon) =>
+    Option.fromNullishOr(
+      waitingElsewhere(daemon.waitingOrigins, app.origin, now),
+    ),
+  ).pipe(
+    Option.map(
+      (waitingOrigin) =>
+        `a browser at ${waitingOrigin} is looking for a session - did you mean 'intervu ${waitingOrigin}'?`,
+    ),
+  );
 
   const next = `run 'intervu poll ${session.path}' to receive feedback`;
   const view = Output.appSession({
     key: session.key,
     origin: session.path,
     status: session.status,
+    warning: Option.getOrUndefined(AppUrl.schemePortWarning(app)),
+    didYouMean: Option.getOrUndefined(didYouMean),
     help: Option.match(sighting, {
       onNone: () => pluginHelp(plugin, session.path, next),
       onSome: (covered) => reportedPluginHelp(covered, session.path, next),
@@ -504,6 +521,7 @@ const status = Command.make("status", {}, () =>
             stateDir: answer.stateDir,
             sessions: answer.sessions,
             plugins: answer.plugins,
+            waitingOrigins: answer.waitingOrigins,
             help:
               answer.plugins.length === 0
                 ? "no plugin has reported in - a dev server with the intervu/vite plugin reports on start and while tabs are open"
@@ -650,6 +668,7 @@ const AppLayer = Layer.mergeAll(
   Setup.layer,
   SnapshotFiles.layer,
   PluginRegistry.layer,
+  WaitingOrigins.layer,
 ).pipe(
   Layer.provideMerge(SessionHub.layer),
   Layer.provideMerge(SessionPersistence.fileLayer),

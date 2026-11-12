@@ -15,7 +15,9 @@ test("intervu <url> opens the origin's Session, names the next poll and opens no
 
   expect(run.stderr).toBe("");
   expect(run.exitCode).toBe(0);
-  expect(run.output).toEqual({
+  // `toMatchObject`, not `toEqual`: a concurrent spec's browser waiting at
+  // another origin may legitimately add a `didYouMean` line to this open.
+  expect(run.output).toMatchObject({
     key: expect.stringMatching(/^[0-9a-f]{16}$/),
     origin: fixtureAppUrl,
     status: "open",
