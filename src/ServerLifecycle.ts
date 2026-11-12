@@ -516,6 +516,9 @@ export class ServerLifecycle extends Context.Service<
             if (Option.isNone(alive)) {
               return yield* Effect.fail(new DaemonNotRunning());
             }
+            // A short breath between re-issues, so a path that drops
+            // instantly (while /health still answers) cannot spin hot.
+            yield* Effect.sleep("250 millis");
           }
         });
 
