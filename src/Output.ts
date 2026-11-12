@@ -303,6 +303,125 @@ export const setup = (params: {
   help: params.help,
 });
 
+/** One Session as `intervu status` prints it, in canonical key order. */
+export interface StatusSessionView {
+  readonly key: string;
+  readonly kind: string;
+  readonly handle: string;
+  readonly status: string;
+  readonly presence: string;
+}
+
+/** One reporting plugin as `intervu status` prints it. */
+export interface StatusPluginView {
+  readonly origin: string;
+  readonly seenOrigins: readonly string[];
+  readonly lastSeenAt: string;
+}
+
+/**
+ * One refusal tally as `intervu status` prints it: which plugin tallied it,
+ * the rejection reason, and the origins the refused request presented
+ * (omitted when it presented none).
+ */
+export interface StatusRefusalView {
+  readonly plugin: string;
+  readonly reason: string;
+  readonly origin?: string;
+  readonly pageOrigin?: string;
+  readonly count: number;
+  readonly lastAt: string;
+}
+
+/**
+ * The `intervu status` view, in canonical key order: the daemon describing
+ * itself, its Sessions with Presence, the reporting plugins, their refusal
+ * tallies, then `help`.
+ */
+export interface StatusView {
+  readonly version: string;
+  readonly port: number;
+  readonly stateDir: string;
+  readonly sessions: readonly StatusSessionView[];
+  readonly plugins: readonly StatusPluginView[];
+  readonly refusals: readonly StatusRefusalView[];
+  readonly help: string;
+}
+
+/** An epoch-milliseconds stamp as the ISO-8601 string status prints. */
+const isoOf = (epochMs: number): string => new Date(epochMs).toISOString();
+
+/**
+ * Shape the `status` view from the daemon's answer, pinning key order so the
+ * TOON render is stable. Refusal tallies are flattened across plugins, each
+ * row naming the plugin that tallied it.
+ */
+export const status = (params: {
+  readonly version: string;
+  readonly port: number;
+  readonly stateDir: string;
+  readonly sessions: readonly StatusSessionView[];
+  readonly plugins: readonly {
+    readonly origin: string;
+    readonly seenOrigins: readonly string[];
+    readonly refusals: readonly {
+      readonly reason: string;
+      readonly origin?: string | undefined;
+      readonly pageOrigin?: string | undefined;
+      readonly count: number;
+      readonly lastAt: number;
+    }[];
+    readonly lastSeenAt: number;
+  }[];
+  readonly help: string;
+}): StatusView => ({
+  version: params.version,
+  port: params.port,
+  stateDir: params.stateDir,
+  sessions: params.sessions.map((session) => ({
+    key: session.key,
+    kind: session.kind,
+    handle: session.handle,
+    status: session.status,
+    presence: session.presence,
+  })),
+  plugins: params.plugins.map((plugin) => ({
+    origin: plugin.origin,
+    seenOrigins: plugin.seenOrigins,
+    lastSeenAt: isoOf(plugin.lastSeenAt),
+  })),
+  refusals: params.plugins.flatMap((plugin) =>
+    plugin.refusals.map((refusal) => ({
+      plugin: plugin.origin,
+      reason: refusal.reason,
+      ...(refusal.origin === undefined ? {} : { origin: refusal.origin }),
+      ...(refusal.pageOrigin === undefined
+        ? {}
+        : { pageOrigin: refusal.pageOrigin }),
+      count: refusal.count,
+      lastAt: isoOf(refusal.lastAt),
+    })),
+  ),
+  help: params.help,
+});
+
+/** The `status` view when no daemon answered on the port. */
+export interface StatusNoDaemonView {
+  readonly daemon: "none";
+  readonly port: number;
+  readonly help: string;
+}
+
+/** Shape the no-daemon `status` view. */
+export const statusNoDaemon = (params: {
+  readonly port: number;
+  readonly help: string;
+}): StatusNoDaemonView => ({
+  daemon: "none",
+  port: params.port,
+  help: params.help,
+});
+
 /**
  * A structured error view. Errors are success-only here - the failure path is
  * wired in the AXI-polish slice (#9) - but the shape is the seam they land on.

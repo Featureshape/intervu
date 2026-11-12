@@ -17,8 +17,9 @@ import { AppConfig } from "./AppConfig.ts";
 import * as ArtifactAssets from "./ArtifactAssets.ts";
 import { ArtifactWatcher } from "./ArtifactWatcher.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
-import { appSessionPath } from "./DaemonRoutes.ts";
+import { appSessionPath, pluginReportPath } from "./DaemonRoutes.ts";
 import * as FeedbackWait from "./FeedbackWait.ts";
+import { PluginRegistry } from "./PluginRegistry.ts";
 import {
   AppSessionRequest,
   AppSessionResponse,
@@ -26,10 +27,13 @@ import {
   EndResponse,
   EndRiderRequest,
   OpenSessionRequest,
+  PluginReportRequest,
   PollRequest,
   PollResponse,
   ReplyRequest,
   ReplyResponse,
+  StatusResponse,
+  StatusSession,
   ValidFeedback,
 } from "./Protocol.ts";
 import { type Session, SessionKey } from "./Session.ts";
@@ -152,6 +156,77 @@ const appSessionRoute = HttpRouter.add(
     ),
     Effect.catch((error) =>
       Effect.logError(`GET ${appSessionPath} failed`, error).pipe(
+        Effect.as(HttpServerResponse.empty({ status: 500 })),
+      ),
+    ),
+  ),
+);
+
+/**
+ * The plugin's push channel: one `intervu/vite` plugin reporting its own
+ * origin, the page origins it has seen succeed, and its refusal tallies. The
+ * registry keeps it in memory only. A malformed report is a `400`; an old
+ * daemon has no such route, and the plugin reads that `404` as "old daemon"
+ * and keeps relaying.
+ */
+const pluginReportRoute = HttpRouter.add(
+  "POST",
+  pluginReportPath,
+  Effect.gen(function* () {
+    const registry = yield* PluginRegistry;
+    const body = yield* HttpServerRequest.schemaBodyJson(PluginReportRequest);
+    yield* registry.report(body);
+    return HttpServerResponse.jsonUnsafe({ ok: true });
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.logWarning(`POST ${pluginReportPath} rejected`, error).pipe(
+        Effect.as(HttpServerResponse.empty({ status: 400 })),
+      ),
+    ),
+  ),
+);
+
+/**
+ * The live diagnostics `intervu status` renders: the daemon describing itself
+ * (version, port, state dir), every Session with its Presence, and every
+ * plugin that has reported in. The Home view stays offline (ADR 0013); this
+ * is the one route that answers "what is intervu seeing right now?".
+ */
+const statusRoute = HttpRouter.add(
+  "GET",
+  "/status",
+  Effect.gen(function* () {
+    const config = yield* AppConfig;
+    const store = yield* SessionStore;
+    const hub = yield* SessionHub;
+    const registry = yield* PluginRegistry;
+    const sessions = yield* store.list;
+    const withPresence = yield* Effect.forEach(sessions, (session) =>
+      hub.presence(session.key).pipe(
+        Effect.map((presence) =>
+          StatusSession.make({
+            key: session.key,
+            kind: session.kind,
+            handle: session.path,
+            status: session.status,
+            presence,
+          }),
+        ),
+      ),
+    );
+    const plugins = yield* registry.sightings;
+    return yield* HttpServerResponse.schemaJson(StatusResponse)(
+      StatusResponse.make({
+        version: config.version,
+        port: config.port,
+        stateDir: config.stateDir,
+        sessions: withPresence,
+        plugins,
+      }),
+    );
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.logError("GET /status failed", error).pipe(
         Effect.as(HttpServerResponse.empty({ status: 500 })),
       ),
     ),
@@ -658,6 +733,8 @@ export const layer = HttpRouter.serve(
     healthRoute,
     sessionsRoute,
     appSessionRoute,
+    pluginReportRoute,
+    statusRoute,
     chromeRoute,
     artifactRoute,
     sourceRoute,

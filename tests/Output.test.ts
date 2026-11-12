@@ -340,6 +340,86 @@ describe("Output.setup", () => {
   });
 });
 
+describe("Output.status", () => {
+  it("shapes the daemon's answer, flattening refusal tallies per plugin", () => {
+    const view = Output.status({
+      help: "run a poll",
+      version: "0.3.1",
+      port: 51789,
+      stateDir: "/home/u/.local/state/intervu",
+      sessions: [
+        {
+          key: "0123456789abcdef",
+          kind: "app",
+          handle: "https://app.test",
+          status: "open",
+          presence: "listening",
+        },
+      ],
+      plugins: [
+        {
+          origin: "http://localhost:5173",
+          seenOrigins: ["https://app.test"],
+          refusals: [
+            {
+              reason: "foreign-page-origin",
+              pageOrigin: "https://app.test:8443",
+              count: 3,
+              lastAt: 1_700_000_000_000,
+            },
+          ],
+          lastSeenAt: 1_700_000_060_000,
+        },
+      ],
+    });
+
+    expect(Object.keys(view)).toEqual([
+      "version",
+      "port",
+      "stateDir",
+      "sessions",
+      "plugins",
+      "refusals",
+      "help",
+    ]);
+    expect(view.sessions).toEqual([
+      {
+        key: "0123456789abcdef",
+        kind: "app",
+        handle: "https://app.test",
+        status: "open",
+        presence: "listening",
+      },
+    ]);
+    expect(view.plugins).toEqual([
+      {
+        origin: "http://localhost:5173",
+        seenOrigins: ["https://app.test"],
+        lastSeenAt: "2023-11-14T22:14:20.000Z",
+      },
+    ]);
+    expect(view.refusals).toEqual([
+      {
+        plugin: "http://localhost:5173",
+        reason: "foreign-page-origin",
+        pageOrigin: "https://app.test:8443",
+        count: 3,
+        lastAt: "2023-11-14T22:13:20.000Z",
+      },
+    ]);
+    expect(view.refusals[0] && "origin" in view.refusals[0]).toBe(false);
+  });
+});
+
+describe("Output.statusNoDaemon", () => {
+  it("answers no-daemon as a view, not an error", () => {
+    const view = Output.statusNoDaemon({ port: 51789, help: "start one" });
+
+    expect(view).toEqual({ daemon: "none", port: 51789, help: "start one" });
+    expect(Object.keys(view)).toEqual(["daemon", "port", "help"]);
+  });
+});
+
 describe("Output.merge", () => {
   it("combines fragments with extra winning on conflict", () => {
     const merged = Output.merge(

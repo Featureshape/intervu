@@ -242,3 +242,16 @@ test("when its proxy stops forwarding the browser's Host, the badge names the re
     "[intervu] refused GET /__intervu/session: the page origin the overlay named is not an address this dev server answers to",
   );
 });
+
+test("a probe the proxy blocks no longer produces a false plugin warning", async () => {
+  // The CLI's own probe through the still-misconfigured proxy is refused, but
+  // the plugin has been reporting to the daemon the whole time - and it has
+  // seen this origin succeed - so the help line says that instead.
+  const run = await runCli([swappedAppUrl], browserRecorder());
+  expect(run.exitCode).toBe(0);
+  const help = String(fieldOf(run.output, "help"));
+  expect(help).toContain("is reporting to the daemon");
+  expect(help).toContain(`dev server http://localhost:${vitePort}`);
+  expect(help).not.toContain("refused the request");
+  expect(help).not.toContain("plugin is missing");
+});
