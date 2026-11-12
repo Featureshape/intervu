@@ -5,6 +5,7 @@ import * as https from "node:https";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as nodePath from "node:path";
+import type { Duplex } from "node:stream";
 
 /**
  * A TLS-terminating reverse proxy in front of a Vite dev server, the way nginx
@@ -67,9 +68,24 @@ const tooLarge = `<html>
 </html>
 `;
 
+/** How a proxy is started: where it listens, where Vite is, what it forwards. */
+export interface HttpsProxyOptions {
+  readonly port: number;
+  readonly vitePort: number;
+  readonly bodyLimit: number;
+  /**
+   * With `false`, the proxy is misconfigured the common way: it rewrites
+   * `Host` to the upstream's own and forwards nothing about the browser -
+   * an nginx `proxy_pass` without the `proxy_set_header` lines - so the dev
+   * server cannot tell the browser's origin is its own.
+   */
+  readonly forwardHost?: boolean;
+}
+
 /** The browser's headers, plus what nginx's `proxy_set_header` lines add. */
 const forwardedHeaders = (
   request: http.IncomingMessage,
+  options: HttpsProxyOptions,
 ): Record<string, string> => {
   const headers: Record<string, string> = {};
   const raw = request.rawHeaders;
@@ -80,17 +96,19 @@ const forwardedHeaders = (
       headers[name.toLowerCase()] = value;
     }
   }
+  if (options.forwardHost === false) {
+    headers.host = `localhost:${options.vitePort}`;
+    return headers;
+  }
   headers["x-forwarded-proto"] = "https";
   headers["x-forwarded-host"] = headers.host ?? "";
   return headers;
 };
 
 /** Start the proxy on `port`, forwarding to Vite on `localhost:vitePort`. */
-export const startHttpsProxy = (options: {
-  readonly port: number;
-  readonly vitePort: number;
-  readonly bodyLimit: number;
-}): Promise<HttpsProxy> => {
+export const startHttpsProxy = (
+  options: HttpsProxyOptions,
+): Promise<HttpsProxy> => {
   const server = https.createServer(
     selfSignedCertificate(),
     (request, response) => {
@@ -109,7 +127,7 @@ export const startHttpsProxy = (options: {
           port: options.vitePort,
           method: request.method,
           path: request.url,
-          headers: forwardedHeaders(request),
+          headers: forwardedHeaders(request, options),
         },
         (viteResponse) => {
           response.writeHead(
@@ -126,9 +144,15 @@ export const startHttpsProxy = (options: {
     },
   );
 
+  // Upgraded sockets (Vite's HMR websocket) leave the server's connection
+  // tracking, so `closeAllConnections` misses them and `close` would wait on
+  // them forever; they are tracked and destroyed here instead.
+  const upgraded = new Set<Duplex>();
   server.on("upgrade", (request, socket, head) => {
+    upgraded.add(socket);
+    socket.on("close", () => upgraded.delete(socket));
     const upstream = net.connect(options.vitePort, "localhost", () => {
-      const headers = Object.entries(forwardedHeaders(request))
+      const headers = Object.entries(forwardedHeaders(request, options))
         .map(([name, value]) => `${name}: ${value}\r\n`)
         .join("");
       upstream.write(
@@ -148,6 +172,9 @@ export const startHttpsProxy = (options: {
         url: `https://localhost:${options.port}`,
         close: () =>
           new Promise<void>((closed) => {
+            for (const socket of upgraded) {
+              socket.destroy();
+            }
             server.closeAllConnections();
             server.close(() => closed());
           }),

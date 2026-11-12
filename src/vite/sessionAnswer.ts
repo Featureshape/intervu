@@ -16,3 +16,19 @@ export const openSessionKeyIn = (answer: unknown): string | null =>
   typeof answer.session.key === "string"
     ? answer.session.key
     : null;
+
+/**
+ * The daemon port(s) a decoded relay lookup answer says nothing answered on,
+ * or `null` when it says no such thing - a daemon's own answer, or a relay
+ * from before the `daemon` field, which the overlay reads as today's
+ * "no Session".
+ */
+export const unreachedDaemonPortsIn = (
+  answer: unknown,
+): readonly number[] | null =>
+  hasField(answer, "daemon") &&
+  answer.daemon === "unreachable" &&
+  hasField(answer, "ports") &&
+  Array.isArray(answer.ports)
+    ? answer.ports.filter((port): port is number => typeof port === "number")
+    : null;

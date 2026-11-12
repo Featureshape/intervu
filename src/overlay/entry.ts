@@ -15,7 +15,7 @@ import {
   relayPrefix,
   sessionPath,
 } from "../vite/relayPaths.ts";
-import { openSessionKeyIn } from "../vite/sessionAnswer.ts";
+import { classifyLookup, type LookupState } from "./lookupState.ts";
 import { trimSnapshot } from "./snapshot.ts";
 import {
   readDraft,
@@ -97,6 +97,7 @@ const STYLES = `
     border-radius: 50%;
     background: #8b8b96;
   }
+  .badge[data-intervu-badge="refused"] .dot { background: #e5484d; }
   .card {
     width: 288px;
     padding: 12px;
@@ -439,28 +440,37 @@ const sessionLookupIntervalMs = 1_000;
 const openCommand = (): string => `intervu ${window.location.origin}`;
 
 /**
- * Ask the relay which Session is open for this origin. A dev server that
- * stopped answering is "not yet": the next ask tries again.
+ * Ask the relay which Session is open for this origin, classified for the
+ * badge. A dev server that stopped answering is "not yet": the next ask tries
+ * again.
  */
-const lookupOpenSession = async (): Promise<string | null> => {
+const lookupSessionState = async (): Promise<LookupState> => {
   try {
     const response = await fetch(relayUrl(sessionPath), { cache: "no-store" });
-    return response.ok ? openSessionKeyIn(await response.json()) : null;
+    return classifyLookup(response.status, await response.json());
   } catch {
-    return null;
+    return { kind: "no-session" };
   }
 };
 
+/** The lookup states the dormant badge renders; "open" swaps in the panel. */
+type DormantState = Exclude<LookupState, { kind: "open" }>;
+
 /**
  * Ask once a second until a Session is open, then call `onOpen` once with its
- * key.
+ * key. Until then each ask reports its state through `onState`, so the badge
+ * can say what it last heard.
  */
-const watchForSession = (onOpen: (key: string) => void): void => {
+const watchForSession = (
+  onOpen: (key: string) => void,
+  onState?: (state: DormantState) => void,
+): void => {
   const ask = (): void => {
-    lookupOpenSession().then((key) => {
-      if (key !== null) {
-        onOpen(key);
+    lookupSessionState().then((state) => {
+      if (state.kind === "open") {
+        onOpen(state.key);
       } else {
+        onState?.(state);
         window.setTimeout(ask, sessionLookupIntervalMs);
       }
     });
@@ -468,8 +478,66 @@ const watchForSession = (onOpen: (key: string) => void): void => {
   ask();
 };
 
-/** The dormant badge and the card its click reveals. */
-const renderDormantBadge = (root: HTMLElement): void => {
+/** A paragraph of the dormant card, with an optional data hook. */
+const cardLine = (
+  className: string,
+  text: string,
+  hook?: string,
+): HTMLParagraphElement => {
+  const line = document.createElement("p");
+  line.className = className;
+  line.textContent = text;
+  if (hook !== undefined) {
+    line.setAttribute(hook, "");
+  }
+  return line;
+};
+
+/** The dormant card's contents for `state`: what the last lookup said. */
+const cardContentOf = (state: DormantState): readonly HTMLElement[] => {
+  if (state.kind === "refused") {
+    return [
+      cardLine("title", "The dev server refused intervu's request"),
+      cardLine("hint", state.reason, "data-intervu-refusal-reason"),
+      cardLine(
+        "hint",
+        `Page origin: ${state.pageOrigin ?? window.location.origin}`,
+        "data-intervu-refused-origin",
+      ),
+      cardLine("hint", "The dev server log has the full comparison."),
+    ];
+  }
+  const command = document.createElement("code");
+  command.className = "command";
+  command.setAttribute("data-intervu-command", "");
+  command.textContent = openCommand();
+  if (state.kind === "no-daemon") {
+    return [
+      cardLine("title", "No intervu daemon answered"),
+      cardLine(
+        "hint",
+        `The dev server found no daemon on port ${state.ports.join(", ")}.`,
+        "data-intervu-no-daemon",
+      ),
+      cardLine("hint", "Ask your agent to run:"),
+      command,
+    ];
+  }
+  return [
+    cardLine("title", "No agent is reviewing this app"),
+    cardLine("hint", "Ask your agent to run:"),
+    command,
+  ];
+};
+
+/**
+ * The dormant badge and the card its click reveals. Returns the updater that
+ * renders what the last lookup said: no Session, no daemon behind the dev
+ * server, or a dev server that refused the page.
+ */
+const renderDormantBadge = (
+  root: HTMLElement,
+): ((state: DormantState) => void) => {
   root.replaceChildren();
 
   const card = document.createElement("div");
@@ -478,32 +546,32 @@ const renderDormantBadge = (root: HTMLElement): void => {
   card.hidden = true;
   card.setAttribute("data-intervu-dormant-card", "");
 
-  const title = document.createElement("p");
-  title.className = "title";
-  title.textContent = "No agent is reviewing this app";
-
-  const hint = document.createElement("p");
-  hint.className = "hint";
-  hint.textContent = "Ask your agent to run:";
-
-  const command = document.createElement("code");
-  command.className = "command";
-  command.setAttribute("data-intervu-command", "");
-  command.textContent = openCommand();
-
-  card.append(title, hint, command);
-
   const badge = document.createElement("button");
   badge.type = "button";
   badge.className = "badge";
-  badge.setAttribute("data-intervu-badge", "dormant");
   badge.setAttribute("aria-expanded", "false");
   badge.setAttribute("aria-controls", card.id);
 
   const dot = document.createElement("span");
   dot.className = "dot";
   dot.setAttribute("aria-hidden", "true");
-  badge.append(dot, "intervu: no agent");
+
+  let rendered = "";
+  const update = (state: DormantState): void => {
+    const stamp = JSON.stringify(state);
+    if (stamp === rendered) {
+      return;
+    }
+    rendered = stamp;
+    const refused = state.kind === "refused";
+    badge.setAttribute("data-intervu-badge", refused ? "refused" : "dormant");
+    badge.replaceChildren(
+      dot,
+      refused ? "intervu: refused by dev server" : "intervu: no agent",
+    );
+    card.replaceChildren(...cardContentOf(state));
+  };
+  update({ kind: "no-session" });
 
   const setOpen = (open: boolean): void => {
     card.hidden = !open;
@@ -519,6 +587,7 @@ const renderDormantBadge = (root: HTMLElement): void => {
   badge.addEventListener("keydown", closeOnEscape);
 
   root.append(card, badge);
+  return update;
 };
 
 /** The chevron the collapse button shows, pointing down while expanded. */
@@ -1231,8 +1300,8 @@ const mountOverlay = (): void => {
   document.body.append(host);
   host.showPopover();
 
-  renderDormantBadge(root);
-  watchForSession((key) => renderPanel(host, root, key));
+  const updateBadge = renderDormantBadge(root);
+  watchForSession((key) => renderPanel(host, root, key), updateBadge);
 };
 
 mountOverlay();

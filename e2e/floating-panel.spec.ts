@@ -36,6 +36,19 @@ test("intervu <url> swaps the dormant badge for the panel within 2 seconds, with
 
   await page.goto(panelAppUrl);
   await expect(badge(page)).toHaveAttribute("data-intervu-badge", "dormant");
+
+  // The daemon is up with no Session: the card offers the open command.
+  await badge(page).click();
+  const card = page.locator("[data-intervu-dormant-card]");
+  await expect(card.locator(".title")).toHaveText(
+    "No agent is reviewing this app",
+  );
+  await expect(page.locator("[data-intervu-command]")).toHaveText(
+    `intervu ${panelAppUrl}`,
+  );
+  await badge(page).click();
+  await expect(card).toBeHidden();
+
   // App state and a page-scoped marker that a reload would both wipe.
   await page.locator("#counter").click();
   await expect(page.locator("#counter")).toHaveText("Clicked 1 times");

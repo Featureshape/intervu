@@ -1,6 +1,7 @@
 import * as http from "node:http";
 import { isIP } from "node:net";
 import { appSessionUrl, sessionKeyPattern } from "../DaemonRoutes.ts";
+import type { GuardRejection } from "./guardRefusal.ts";
 import { relayPrefix } from "./relayPaths.ts";
 import { openSessionKeyIn } from "./sessionAnswer.ts";
 
@@ -64,13 +65,6 @@ export interface GuardInput {
   /** Vite's `server.allowedHosts`: extra hostnames the server answers to. */
   readonly allowedHosts: readonly string[] | true;
 }
-
-/** Why the guard turned a request away. */
-export type GuardRejection =
-  | "foreign-host"
-  | "foreign-origin"
-  | "foreign-page-origin"
-  | "cross-site-fetch";
 
 /**
  * The guard's verdict: a request that may pass, with the origin of the page
@@ -400,6 +394,37 @@ export const sendError = (
 };
 
 /**
+ * The 403 body of a request the guard refused: the rejection code as `reason`
+ * and the origins the request itself presented, so the badge's card can name
+ * both. It echoes only what the caller sent - the server's trusted-host list
+ * stays in the dev server log (`describeRejection`), out of a foreign page's
+ * reach.
+ */
+export const guardRefusalBodyOf = (
+  rejection: GuardRejection,
+  input: GuardInput,
+): string =>
+  JSON.stringify({
+    error: {
+      tag: "ForeignOrigin",
+      message: `intervu only answers the dev server's own origin (${rejection})`,
+      reason: rejection,
+      origin: input.origin,
+      pageOrigin: input.pageOrigin,
+    },
+  });
+
+/** End `response` as a 403 carrying the guard's refusal. */
+export const sendGuardRefusal = (
+  response: http.ServerResponse,
+  rejection: GuardRejection,
+  input: GuardInput,
+): void => {
+  response.writeHead(403, { "content-type": "application/json" });
+  response.end(guardRefusalBodyOf(rejection, input));
+};
+
+/**
  * Forward `request` to the daemon at `127.0.0.1:port` as `path`, streaming the
  * body both ways so a Server-Sent Events response reaches the page as it is
  * written. A daemon that does not answer becomes a 502 `DaemonUnreachable`.
@@ -458,8 +483,13 @@ export const relayToDaemon = (
 /** How long the relay waits for the daemon to answer a Session lookup. */
 const lookupTimeoutMs = 1_000;
 
-/** The relay's answer when no daemon is there to ask: no Session is open. */
-const noSession = JSON.stringify({ session: null });
+/**
+ * The relay's answer when no daemon was there to ask: no Session is open, and
+ * the badge's card can say which port(s) the relay tried. An overlay from
+ * before the `daemon` field ignores it and keeps reading `session: null`.
+ */
+const noDaemonAnswer = (ports: readonly number[]): string =>
+  JSON.stringify({ session: null, daemon: "unreachable", ports });
 
 /**
  * Ask the daemon's `GET /apps/session` which Session is open for `origin`, the
@@ -519,9 +549,10 @@ const openSessionKeyOf = (answer: string): string | null => {
  * Answer the overlay's "is a Session open for this origin?" with the daemon's
  * `GET /apps/session` answer for `origin`. The overlay asks every second while
  * it rests as the dormant badge, so a daemon that is not running, or not
- * answering in time, is the ordinary "no Session" answer rather than a `502`:
- * a failed request would print an error in the app's console that the page
- * cannot suppress.
+ * answering in time, is still a `200` rather than a `502` - a failed request
+ * would print an error in the app's console that the page cannot suppress -
+ * but one whose body says the daemon itself did not answer, so the badge can
+ * tell "no daemon" from "no Session".
  */
 export const answerSessionLookup = (
   response: http.ServerResponse,
@@ -534,7 +565,7 @@ export const answerSessionLookup = (
         "content-type": "application/json",
         "cache-control": "no-store",
       });
-      response.end(answer ?? noSession);
+      response.end(answer ?? noDaemonAnswer([port]));
     }
   });
 };

@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import { expect, test } from "@playwright/test";
 import { browserRecorder, fieldOf, runCli } from "./cli.ts";
 import { type HttpsProxy, startHttpsProxy } from "./httpsProxy.ts";
-import { composerInput, panel, sendButton } from "./panel.ts";
+import { badge, composerInput, panel, sendButton } from "./panel.ts";
 import { daemonPort, fixtureAppDir, viteBin } from "./support.ts";
 
 /**
@@ -13,7 +13,7 @@ import { daemonPort, fixtureAppDir, viteBin } from "./support.ts";
  * Session `intervu <https url>` opened, and send Feedback through the proxy;
  * a body the proxy refuses for size must still deliver the human's note and
  * say why; and a request the relay refuses must say why in the dev server's
- * log.
+ * log, in the 403 body, and - for the page's own lookups - in the badge.
  *
  * The spec serves the fixture app on its own port, with its own proxy, and
  * shares one Session across its tests, so they run in order.
@@ -24,15 +24,21 @@ test.use({ ignoreHTTPSErrors: true });
 
 const vitePort = 52013;
 const proxyPort = 52014;
+/** A port whose proxy one spec swaps for a misconfigured one mid-tab. */
+const swappedProxyPort = 52016;
 /** nginx's default `client_body_buffer_size` on 64-bit platforms. */
 const bodyLimit = 16 * 1024;
 
 let devServer: ChildProcess | undefined;
 let proxy: HttpsProxy | undefined;
+let swappedProxy: HttpsProxy | undefined;
 let devServerLog = "";
 
 /** The proxy's https URL, the one the human and the agent use. */
 const appUrl = `https://localhost:${proxyPort}`;
+
+/** The swapped proxy's https URL, whose pages the relay ends up refusing. */
+const swappedAppUrl = `https://localhost:${swappedProxyPort}`;
 
 const appAnswers = (): Promise<boolean> =>
   fetch(`http://localhost:${vitePort}`)
@@ -65,6 +71,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   await proxy?.close();
+  await swappedProxy?.close();
   devServer?.kill();
 });
 
@@ -164,5 +171,74 @@ test("a request the relay refuses says why in the dev server's log", async ({
     );
   expect(devServerLog).toContain(
     `Host: localhost:${proxyPort}, Origin: https://evil.example`,
+  );
+});
+
+test("the 403 body names the reason and echoes only what the request presented", async ({
+  request,
+}) => {
+  const response = await request.get(`${appUrl}/__intervu/overlay.js`, {
+    headers: { Origin: "https://evil.example" },
+  });
+  expect(response.status()).toBe(403);
+  expect(await response.json()).toEqual({
+    error: {
+      tag: "ForeignOrigin",
+      message:
+        "intervu only answers the dev server's own origin (foreign-origin)",
+      reason: "foreign-origin",
+      origin: "https://evil.example",
+    },
+  });
+  // The server's trusted-host list stays out of a foreign caller's reach.
+  expect(await response.text()).not.toContain("localhost");
+});
+
+test("when its proxy stops forwarding the browser's Host, the badge names the refusal", async ({
+  page,
+}) => {
+  // The tab loads through a well-configured proxy: the overlay comes up and
+  // rests as the dormant badge (no Session is open for this origin).
+  swappedProxy = await startHttpsProxy({
+    port: swappedProxyPort,
+    vitePort,
+    bodyLimit,
+  });
+  await page.goto(swappedAppUrl);
+  const overlayBadge = badge(page);
+  await expect(overlayBadge).toHaveText("intervu: no agent");
+
+  // The proxy is swapped for one that forwards nothing about the browser -
+  // an nginx `proxy_pass` without its `proxy_set_header` lines. The overlay's
+  // next lookup is refused, and the badge says so instead of "no agent".
+  await swappedProxy.close();
+  swappedProxy = await startHttpsProxy({
+    port: swappedProxyPort,
+    vitePort,
+    bodyLimit,
+    forwardHost: false,
+  });
+  await expect(overlayBadge).toHaveText("intervu: refused by dev server", {
+    timeout: 15_000,
+  });
+  await expect(overlayBadge).toHaveAttribute("data-intervu-badge", "refused");
+
+  await overlayBadge.click();
+  const card = page.locator("[data-intervu-dormant-card]");
+  await expect(card).toBeVisible();
+  await expect(card.locator(".title")).toHaveText(
+    "The dev server refused intervu's request",
+  );
+  await expect(page.locator("[data-intervu-refusal-reason]")).toHaveText(
+    "page origin doesn't match what the dev server trusts",
+  );
+  await expect(page.locator("[data-intervu-refused-origin]")).toHaveText(
+    `Page origin: ${swappedAppUrl}`,
+  );
+  await expect(card).toContainText(
+    "The dev server log has the full comparison.",
+  );
+  expect(devServerLog).toContain(
+    "[intervu] refused GET /__intervu/session: the page origin the overlay named is not an address this dev server answers to",
   );
 });
