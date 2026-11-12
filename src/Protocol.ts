@@ -248,7 +248,9 @@ export class StatusResponse extends Schema.Class<StatusResponse>(
   stateDir: Schema.String,
   sessions: Schema.Array(StatusSession),
   plugins: Schema.Array(StatusPlugin),
-  waitingOrigins: Schema.Array(WaitingOrigin),
+  // Optional on the wire: a still-running daemon from the build before this
+  // field must not fail a newer CLI's `intervu status` decode mid-upgrade.
+  waitingOrigins: Schema.optional(Schema.Array(WaitingOrigin)),
 }) {}
 
 /**

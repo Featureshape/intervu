@@ -259,7 +259,7 @@ const openApp = Effect.fn("openApp")(function* (
   // wrong origin - say so (behaviour: waiting origins, did-you-mean).
   const didYouMean = Option.flatMap(daemonStatus, (daemon) =>
     Option.fromNullishOr(
-      waitingElsewhere(daemon.waitingOrigins, app.origin, now),
+      waitingElsewhere(daemon.waitingOrigins ?? [], app.origin, now),
     ),
   ).pipe(
     Option.map(
@@ -521,7 +521,7 @@ const status = Command.make("status", {}, () =>
             stateDir: answer.stateDir,
             sessions: answer.sessions,
             plugins: answer.plugins,
-            waitingOrigins: answer.waitingOrigins,
+            waitingOrigins: answer.waitingOrigins ?? [],
             help:
               answer.plugins.length === 0
                 ? "no plugin has reported in - a dev server with the intervu/vite plugin reports on start and while tabs are open"
