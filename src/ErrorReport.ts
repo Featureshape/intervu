@@ -15,6 +15,7 @@ import {
   SettingsFileUnreadable,
   StaleDaemon,
   StaleServerTakeover,
+  VitePluginBuildError,
 } from "./Errors.ts";
 import * as Output from "./Output.ts";
 
@@ -132,6 +133,16 @@ export const report = (
         tag: error._tag,
         message: `browser asset build failed: ${error.reason}`,
         help: `check the daemon log at ${ctx.logFile}`,
+      }),
+    );
+  }
+
+  if (error instanceof VitePluginBuildError) {
+    return Option.some(
+      Output.error({
+        tag: error._tag,
+        message: `could not bundle the intervu/vite plugin from source: ${error.reason}`,
+        help: "fix the build error, then re-run 'intervu setup vite'",
       }),
     );
   }

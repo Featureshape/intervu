@@ -63,6 +63,8 @@ export default defineConfig({
 });
 ```
 
+Where adding a dependency is awkward, run `intervu setup vite` in the project root instead: it writes the bundled plugin to `.intervu/vite.mjs` and prints the exact import line, and the `vite.config.ts` edit stays yours - intervu never edits build config.
+
 Then ask the human to restart the dev server, because Vite reads its config only at startup.
 The plugin runs only under `vite dev` and never enters a production build.
 With the plugin in place and no review open, the app shows a small "intervu: no agent" badge, which tells you and the human that it is wired.

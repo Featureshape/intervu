@@ -491,10 +491,19 @@ describe("Output.status", () => {
 
 describe("Output.statusNoDaemon", () => {
   it("answers no-daemon as a view, not an error", () => {
-    const view = Output.statusNoDaemon({ port: 51789, help: "start one" });
+    const view = Output.statusNoDaemon({
+      port: 51789,
+      stateDir: "/tmp/intervu-user",
+      help: "start one",
+    });
 
-    expect(view).toEqual({ daemon: "none", port: 51789, help: "start one" });
-    expect(Object.keys(view)).toEqual(["daemon", "port", "help"]);
+    expect(view).toEqual({
+      daemon: "none",
+      port: 51789,
+      stateDir: "/tmp/intervu-user",
+      help: "start one",
+    });
+    expect(Object.keys(view)).toEqual(["daemon", "port", "stateDir", "help"]);
   });
 });
 
