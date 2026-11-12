@@ -13,6 +13,7 @@ import {
   relayToDaemon,
   relayToOwnSession,
   sendError,
+  sendGuardRefusal,
 } from "./relay.ts";
 import {
   overlayPath,
@@ -67,12 +68,7 @@ const overlayPlugin = (): Plugin => ({
         warnOnce(
           describeRejection(method, path, verdict.rejection, guardInput),
         );
-        sendError(
-          response,
-          403,
-          "ForeignOrigin",
-          `intervu only answers the dev server's own origin (${verdict.rejection})`,
-        );
+        sendGuardRefusal(response, verdict.rejection, guardInput);
         return;
       }
 

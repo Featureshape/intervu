@@ -4,6 +4,7 @@ import {
   forwardedParamOf,
   type GuardInput,
   type GuardVerdict,
+  guardRefusalBodyOf,
   guardRequest,
   isRelayedRoute,
   ownSessionRouteKey,
@@ -213,6 +214,56 @@ describe("describeRejection", () => {
     ).toBe(
       "[intervu] refused GET /__intervu/overlay.js: its Origin is not an address this dev server answers to - behind a proxy, forward the browser's Host (or X-Forwarded-Host) and add the hostname to server.allowedHosts (Host: app.test:443, Origin: https://evil.example)",
     );
+  });
+});
+
+describe("guardRefusalBodyOf", () => {
+  it("carries the reason and the origins the request presented", () => {
+    expect(
+      JSON.parse(
+        guardRefusalBodyOf(
+          "foreign-page-origin",
+          request({
+            origin: "https://app.test",
+            pageOrigin: "https://app.test:8443",
+          }),
+        ),
+      ),
+    ).toEqual({
+      error: {
+        tag: "ForeignOrigin",
+        message:
+          "intervu only answers the dev server's own origin (foreign-page-origin)",
+        reason: "foreign-page-origin",
+        origin: "https://app.test",
+        pageOrigin: "https://app.test:8443",
+      },
+    });
+  });
+
+  it("drops the origins the request did not present", () => {
+    expect(JSON.parse(guardRefusalBodyOf("foreign-host", request({})))).toEqual(
+      {
+        error: {
+          tag: "ForeignOrigin",
+          message:
+            "intervu only answers the dev server's own origin (foreign-host)",
+          reason: "foreign-host",
+        },
+      },
+    );
+  });
+
+  it("never echoes the server's trusted-host list", () => {
+    const body = guardRefusalBodyOf(
+      "foreign-origin",
+      request({
+        origin: "https://evil.example",
+        allowedHosts: ["secret-internal.test", "app.test"],
+      }),
+    );
+    expect(body).not.toContain("secret-internal.test");
+    expect(body).not.toContain("allowedHosts");
   });
 });
 

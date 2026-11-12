@@ -82,29 +82,30 @@ describe("answerSessionLookup", () => {
     ]);
   });
 
-  it("answers no Session when the daemon fails", async () => {
+  it("marks the daemon unreachable when it fails, naming the port", async () => {
     const daemonPort = await listen((_request, response) => {
       response.writeHead(500);
       response.end();
     });
     expect(await lookup(daemonPort)).toEqual({
       status: 200,
-      body: { session: null },
+      body: { session: null, daemon: "unreachable", ports: [daemonPort] },
     });
   });
 
-  it("answers no Session when no daemon listens", async () => {
-    expect(await lookup(await closedPort())).toEqual({
+  it("marks the daemon unreachable when no daemon listens", async () => {
+    const daemonPort = await closedPort();
+    expect(await lookup(daemonPort)).toEqual({
       status: 200,
-      body: { session: null },
+      body: { session: null, daemon: "unreachable", ports: [daemonPort] },
     });
   });
 
-  it("answers no Session when the daemon does not answer in time", async () => {
+  it("marks the daemon unreachable when it does not answer in time", async () => {
     const daemonPort = await listen(() => {});
     expect(await lookup(daemonPort)).toEqual({
       status: 200,
-      body: { session: null },
+      body: { session: null, daemon: "unreachable", ports: [daemonPort] },
     });
   });
 });

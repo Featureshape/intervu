@@ -6,6 +6,7 @@ import {
   noDaemonAppUrl,
   previousViteAppUrl,
   recordProblems,
+  unusedDaemonPort,
 } from "./support.ts";
 
 /**
@@ -59,6 +60,13 @@ const expectDormantBadge = async (
   await expect(dormant).toHaveAttribute("aria-expanded", "true");
   await expect(command).toBeVisible();
   await expect(command).toHaveText(`intervu ${url}`);
+
+  // With no daemon behind the dev server, the card says so and names the port.
+  const card = page.locator("[data-intervu-dormant-card]");
+  await expect(card.locator(".title")).toHaveText("No intervu daemon answered");
+  await expect(page.locator("[data-intervu-no-daemon]")).toHaveText(
+    `The dev server found no daemon on port ${unusedDaemonPort}.`,
+  );
 
   // The badge closes again, and the app underneath keeps behaving natively.
   await dormant.click();
