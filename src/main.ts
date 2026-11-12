@@ -1,6 +1,7 @@
 import { BunHttpServer, BunRuntime, BunServices } from "@effect/platform-bun";
 import {
   Cause,
+  Clock,
   Console,
   Effect,
   FileSystem,
@@ -21,6 +22,8 @@ import * as ErrorReport from "./ErrorReport.ts";
 import { ArtifactNotFound, ConflictingSetupScope } from "./Errors.ts";
 import * as IdleShutdown from "./IdleShutdown.ts";
 import * as Output from "./Output.ts";
+import { PluginRegistry } from "./PluginRegistry.ts";
+import type { StatusResponse } from "./Protocol.ts";
 import * as Server from "./Server.ts";
 import { ServerLifecycle } from "./ServerLifecycle.ts";
 import type { SessionKind } from "./Session.ts";
@@ -168,6 +171,43 @@ const pluginHelp = (
   }
 };
 
+/** How fresh a plugin-report must be to outrank a failed probe. */
+const freshReportMs = 90_000;
+
+/**
+ * The plugin sighting that covers `origin`, when the daemon holds a fresh
+ * one: a plugin whose own origin is `origin`, or one that has seen a page on
+ * `origin` succeed. A probe the sandbox or a proxy blocks says `missing` or
+ * `refused`; a fresh sighting proves the plugin is alive and reporting, so
+ * the help line must not claim it is missing.
+ */
+const sightingCovering = (
+  plugins: readonly {
+    readonly origin: string;
+    readonly seenOrigins: readonly string[];
+    readonly lastSeenAt: number;
+  }[],
+  origin: string,
+  now: number,
+) =>
+  plugins.find(
+    (plugin) =>
+      now - plugin.lastSeenAt <= freshReportMs &&
+      (plugin.origin === origin || plugin.seenOrigins.includes(origin)),
+  );
+
+/**
+ * The help line when the probe failed but the daemon holds a fresh
+ * plugin-report covering `origin`: say what the plugin reported instead of
+ * the false "plugin missing" warning.
+ */
+const reportedPluginHelp = (
+  sighting: { readonly origin: string },
+  origin: string,
+  next: string,
+): string =>
+  `review open - the probe could not reach ${origin} from here, but its intervu Vite plugin (dev server ${sighting.origin}) is reporting to the daemon for this origin, so the overlay in the browser's tab can find the Session; ${next}`;
+
 /**
  * `intervu open <url>` (and the bare-URL alias): URL mode (ADR 0022). Fail fast
  * with `AppUnreachable` when nothing answers at the URL; otherwise ensure the
@@ -194,12 +234,34 @@ const openApp = Effect.fn("openApp")(function* (
     yield* Browser.openTab(app.url, config.browser);
   }
 
+  // A probe a sandbox or proxy blocks reads `missing` or `refused` even while
+  // the plugin is alive; a fresh plugin-report held by the daemon outranks it.
+  const sighting =
+    plugin === "missing" || plugin === "refused"
+      ? yield* Effect.gen(function* () {
+          const daemon = yield* lifecycle.status;
+          const now = yield* Clock.currentTimeMillis;
+          return Option.fromNullishOr(
+            sightingCovering(daemon.plugins, app.origin, now),
+          );
+        }).pipe(
+          // Best-effort enrichment: a daemon that cannot answer status falls
+          // back to the probe's own answer rather than failing the open.
+          Effect.orElseSucceed(() =>
+            Option.none<{ readonly origin: string }>(),
+          ),
+        )
+      : Option.none<{ readonly origin: string }>();
+
   const next = `run 'intervu poll ${session.path}' to receive feedback`;
   const view = Output.appSession({
     key: session.key,
     origin: session.path,
     status: session.status,
-    help: pluginHelp(plugin, session.path, next),
+    help: Option.match(sighting, {
+      onNone: () => pluginHelp(plugin, session.path, next),
+      onSome: (covered) => reportedPluginHelp(covered, session.path, next),
+    }),
   });
   yield* emit(yield* Toon.encode(view));
 });
@@ -407,6 +469,53 @@ const server = Command.make(
 );
 
 /**
+ * `intervu status`: the live diagnostics read. Unlike the offline Home view
+ * (ADR 0013), this one talks to the daemon: it prints the daemon's version,
+ * port and state dir, every Session with its Presence, every plugin that has
+ * reported in, and their refusal tallies - so the agent can see what the
+ * browser side sees without a human relaying the tab. No daemon on the port
+ * is an answer, not an error: `daemon: none` with the port it tried.
+ */
+const status = Command.make("status", {}, () =>
+  Effect.gen(function* () {
+    const config = yield* AppConfig;
+    const lifecycle = yield* ServerLifecycle;
+
+    const daemon = yield* lifecycle.status.pipe(
+      Effect.map(Option.some),
+      Effect.catchTag("DaemonNotRunning", () =>
+        Effect.succeed(Option.none<StatusResponse>()),
+      ),
+    );
+
+    const view = Option.match(daemon, {
+      onNone: () =>
+        Toon.encode(
+          Output.statusNoDaemon({
+            port: config.port,
+            help: `no daemon is listening on port ${config.port} - run 'intervu <file|url>' to start one`,
+          }),
+        ),
+      onSome: (answer) =>
+        Toon.encode(
+          Output.status({
+            version: answer.version,
+            port: answer.port,
+            stateDir: answer.stateDir,
+            sessions: answer.sessions,
+            plugins: answer.plugins,
+            help:
+              answer.plugins.length === 0
+                ? "no plugin has reported in - a dev server with the intervu/vite plugin reports on start and while tabs are open"
+                : "run 'intervu poll <file|url>' on an open Session to receive feedback",
+          }),
+        ),
+    });
+    yield* emit(yield* view);
+  }),
+);
+
+/**
  * `intervu stop`: SIGTERM the daemon via the shared pidfile core
  * (`ServerLifecycle.signalStop`, the same channel takeover uses), which releases
  * the server gracefully. Idempotent (ADR 0014): with no daemon to signal - the
@@ -492,7 +601,16 @@ const setup = Command.make(
 );
 
 const cli = root.pipe(
-  Command.withSubcommands([open, poll, reply, end, server, stop, setup]),
+  Command.withSubcommands([
+    open,
+    poll,
+    reply,
+    end,
+    server,
+    stop,
+    status,
+    setup,
+  ]),
 );
 
 /**
@@ -508,6 +626,7 @@ const knownSubcommands = new Set([
   "end",
   "server",
   "stop",
+  "status",
   "setup",
 ]);
 const rawArgs = process.argv.slice(2);
@@ -530,6 +649,7 @@ const AppLayer = Layer.mergeAll(
   ArtifactWatcher.layer,
   Setup.layer,
   SnapshotFiles.layer,
+  PluginRegistry.layer,
 ).pipe(
   Layer.provideMerge(SessionHub.layer),
   Layer.provideMerge(SessionPersistence.fileLayer),

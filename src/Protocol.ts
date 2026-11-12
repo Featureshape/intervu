@@ -115,6 +115,44 @@ export const ValidFeedback = Feedback.check(
 );
 
 /**
+ * One tallied refusal in a plugin-report: the guard's rejection code, the
+ * origins the refused request presented (absent when it presented none), how
+ * often it happened and when it last did (epoch milliseconds, the plugin's
+ * clock).
+ */
+export class PluginRefusalTally extends Schema.Class<PluginRefusalTally>(
+  "PluginRefusalTally",
+)({
+  reason: Schema.String,
+  origin: Schema.optional(Schema.String),
+  pageOrigin: Schema.optional(Schema.String),
+  count: Schema.Number,
+  lastAt: Schema.Number,
+}) {}
+
+/**
+ * `POST /plugins/report` request body: what one `intervu/vite` plugin has seen
+ * since its dev server started - its own origin, the page origins whose relay
+ * requests passed the guard, and its refusal tallies. Sent on dev server
+ * start, every 30s while any tab holds a relay connection, and promptly after
+ * a refusal or a newly seen page origin. The daemon keeps it in memory only.
+ */
+export class PluginReportRequest extends Schema.Class<PluginReportRequest>(
+  "PluginReportRequest",
+)({
+  origin: Schema.String,
+  seenOrigins: Schema.Array(Schema.String),
+  refusals: Schema.Array(PluginRefusalTally),
+}) {}
+
+/** `POST /plugins/report` response body: the report was taken. */
+export class PluginReportResponse extends Schema.Class<PluginReportResponse>(
+  "PluginReportResponse",
+)({
+  ok: Schema.Boolean,
+}) {}
+
+/**
  * `POST /poll` request body (ADR 0009): the artifact's resolved realpath, which
  * the daemon looks up without creating. `timeoutSeconds`, when present, bounds
  * the long-poll and turns an expiry into a `timedOut` response; absent means the
@@ -159,6 +197,45 @@ export class ConversationEntry extends Schema.Class<ConversationEntry>(
  */
 export const Presence = Schema.Literals(["idle", "listening", "working"]);
 export type Presence = typeof Presence.Type;
+
+/** One Session as `GET /status` reports it, with its live Presence. */
+export class StatusSession extends Schema.Class<StatusSession>("StatusSession")(
+  {
+    key: Schema.String,
+    kind: SessionKind,
+    handle: Schema.String,
+    status: SessionStatus,
+    presence: Presence,
+  },
+) {}
+
+/**
+ * One reporting plugin as `GET /status` reports it: the report it last sent
+ * plus `lastSeenAt`, when the daemon took it (epoch milliseconds, the
+ * daemon's clock).
+ */
+export class StatusPlugin extends Schema.Class<StatusPlugin>("StatusPlugin")({
+  origin: Schema.String,
+  seenOrigins: Schema.Array(Schema.String),
+  refusals: Schema.Array(PluginRefusalTally),
+  lastSeenAt: Schema.Number,
+}) {}
+
+/**
+ * `GET /status` response body: the daemon describing itself - version, port
+ * and state dir - plus its Sessions with Presence and every plugin that has
+ * reported in. `intervu status` renders this; the Home view stays offline
+ * (ADR 0013).
+ */
+export class StatusResponse extends Schema.Class<StatusResponse>(
+  "StatusResponse",
+)({
+  version: Schema.String,
+  port: Schema.Number,
+  stateDir: Schema.String,
+  sessions: Schema.Array(StatusSession),
+  plugins: Schema.Array(StatusPlugin),
+}) {}
 
 /**
  * `POST /poll` response body (ADR 0009 / 0011): the drained feedback (possibly

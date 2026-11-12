@@ -28,6 +28,7 @@ import {
   Health,
   PollResponse,
   ReplyResponse,
+  StatusResponse,
 } from "./Protocol.ts";
 import { Session, type SessionKind } from "./Session.ts";
 
@@ -142,6 +143,13 @@ export class ServerLifecycle extends Context.Service<
       message: string,
     ) => Effect.Effect<ReplyResponse, ReplyError>;
     readonly end: (path: string) => Effect.Effect<EndResponse, EndError>;
+    readonly status: Effect.Effect<
+      StatusResponse,
+      | DaemonNotRunning
+      | StaleDaemon
+      | HttpClientError.HttpClientError
+      | Schema.SchemaError
+    >;
   }
 >()("@intervu/ServerLifecycle") {
   static readonly layer = Layer.effect(
@@ -392,6 +400,18 @@ export class ServerLifecycle extends Context.Service<
           );
         });
 
+      // The live diagnostics read (`intervu status`): a healthy, current
+      // daemon must already exist - `requireHealthy` turns a refused
+      // connection into `DaemonNotRunning` and a strictly-older daemon
+      // (which has no `/status` route) into `StaleDaemon` before the read.
+      const status = requireHealthy.pipe(
+        Effect.flatMap(() =>
+          client.execute(HttpClientRequest.get(`${baseUrl}/status`)),
+        ),
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        Effect.flatMap(HttpClientResponse.schemaBodyJson(StatusResponse)),
+      );
+
       return {
         ensure,
         requireHealthy,
@@ -400,6 +420,7 @@ export class ServerLifecycle extends Context.Service<
         poll,
         reply,
         end,
+        status,
       };
     }),
   );

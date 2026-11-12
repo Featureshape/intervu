@@ -21,6 +21,14 @@ import {
   relayPrefix,
   sessionPath,
 } from "./relayPaths.ts";
+import {
+  activeWithin,
+  createReporterState,
+  recordRefusal,
+  recordSeen,
+  reportBodyOf,
+  sendPluginReport,
+} from "./reporter.ts";
 
 /**
  * `intervu/vite`: the Vite plugin that puts intervu into a running app for URL
@@ -56,6 +64,52 @@ const overlayPlugin = (): Plugin => ({
       server.config.logger.warn(message, { timestamp: true }),
     );
 
+    // The plugin-report push: what this dev server has seen, to every local
+    // daemon. Sent on start, every 30s while any tab held a relay connection
+    // within the window, and promptly (debounced) after a refusal or a newly
+    // seen page origin. All timers are unref'd so they never hold Vite open.
+    const reporter = createReporterState();
+    let devServerOrigin: string | null = null;
+    const report = (): void => {
+      if (devServerOrigin !== null) {
+        sendPluginReport([port], reportBodyOf(reporter, devServerOrigin));
+      }
+    };
+    let pendingReport: NodeJS.Timeout | null = null;
+    const reportSoon = (): void => {
+      if (pendingReport !== null) {
+        return;
+      }
+      pendingReport = setTimeout(() => {
+        pendingReport = null;
+        report();
+      }, reportDebounceMs);
+      pendingReport.unref();
+    };
+    server.httpServer?.once("listening", () => {
+      const address = server.httpServer?.address();
+      const boundPort =
+        address !== null && typeof address === "object"
+          ? address.port
+          : undefined;
+      if (boundPort !== undefined) {
+        devServerOrigin = `${https ? "https" : "http"}://localhost:${boundPort}`;
+        report();
+      }
+    });
+    const heartbeat = setInterval(() => {
+      if (activeWithin(reporter, Date.now(), heartbeatIntervalMs)) {
+        report();
+      }
+    }, heartbeatIntervalMs);
+    heartbeat.unref();
+    server.httpServer?.once("close", () => {
+      clearInterval(heartbeat);
+      if (pendingReport !== null) {
+        clearTimeout(pendingReport);
+      }
+    });
+
     server.middlewares.use(relayPrefix, (request, response) => {
       const method = request.method ?? "GET";
       const { path, pageOrigin } = relayTargetOf(request.url ?? "/");
@@ -68,8 +122,21 @@ const overlayPlugin = (): Plugin => ({
         warnOnce(
           describeRejection(method, path, verdict.rejection, guardInput),
         );
+        recordRefusal(
+          reporter,
+          {
+            reason: verdict.rejection,
+            origin: guardInput.origin,
+            pageOrigin: guardInput.pageOrigin,
+          },
+          Date.now(),
+        );
+        reportSoon();
         sendGuardRefusal(response, verdict.rejection, guardInput);
         return;
+      }
+      if (recordSeen(reporter, verdict.pageOrigin, Date.now())) {
+        reportSoon();
       }
 
       if (method === "GET" && path === overlayPath) {
@@ -133,6 +200,12 @@ const overlayPlugin = (): Plugin => ({
     ];
   },
 });
+
+/** How often the plugin re-reports while tabs hold relay connections. */
+const heartbeatIntervalMs = 30_000;
+
+/** The trailing debounce before a prompt report, so bursts send once. */
+const reportDebounceMs = 300;
 
 /** How many distinct warnings one dev server prints before it stops. */
 const warningLimit = 50;
