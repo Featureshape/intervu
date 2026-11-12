@@ -38,6 +38,12 @@ export const App = () => {
     <main>
       <h1 id="headline">Fixture app</h1>
       <Notice />
+      {/* Always-on redaction: this region masks in every snapshot, even
+          with the plugin's `redact` option off. */}
+      <section id="customer" data-intervu-redact>
+        <p id="customer-name">Ada Lovelace</p>
+        <p id="customer-card">4111 1111 1111 1111</p>
+      </section>
       <nav>
         <a
           id="nav-about"

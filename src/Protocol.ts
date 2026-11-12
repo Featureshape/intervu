@@ -99,6 +99,12 @@ export class Feedback extends Schema.Class<Feedback>("Feedback")({
   message: Schema.String,
   annotations: Schema.Array(Annotation),
   domSnapshot: Schema.String,
+  /**
+   * Present and `true` when the page masked its snapshot and annotation text
+   * before sending (owner-configured redaction), so the poll can mark the
+   * placeholders as deliberate. Absent from older overlays.
+   */
+  redacted: Schema.optional(Schema.Boolean),
 }) {}
 
 /**

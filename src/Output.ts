@@ -130,11 +130,13 @@ export interface PollAnnotationView {
 export type PollFeedbackView =
   | {
       readonly message: string;
+      readonly redacted?: true;
       readonly annotations: readonly PollAnnotationView[];
       readonly domSnapshotPath: string;
     }
   | {
       readonly message: string;
+      readonly redacted?: true;
       readonly annotations: readonly PollAnnotationView[];
       readonly domSnapshot: string;
     };
@@ -197,6 +199,8 @@ const shapeFeedback = ({
 }: DeliveredFeedback): PollFeedbackView => {
   const base = {
     message: feedback.message,
+    // Marked so the agent knows the masked placeholders are deliberate.
+    ...(feedback.redacted === true ? { redacted: true as const } : {}),
     annotations: feedback.annotations.map(shapeAnnotation),
   };
   return Option.match(snapshotPath, {
