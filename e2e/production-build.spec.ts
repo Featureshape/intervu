@@ -9,8 +9,11 @@ import { fixtureAppDir, fixtureAppUrl, viteBin } from "./support.ts";
 /**
  * URL mode never ships: the `intervu/vite` plugin is dev-server only, so a
  * production `vite build` of the fixture app holds no overlay, no relay script
- * tag and no `data-intervu-*` attribute. The `data-intervu` fingerprint also
- * covers the `data-intervu-src` stamp of the JSX source transform.
+ * tag and no `data-intervu-*` attribute that intervu itself injects. The
+ * `data-intervu` fingerprint also covers the `data-intervu-src` stamp of the
+ * JSX source transform. The owner-authored `data-intervu-redact` attribute is
+ * the one exception: it is app markup, inert in production, and survives a
+ * build by design.
  */
 
 /** Strings only intervu's dev-time code puts into an app. */
@@ -22,9 +25,16 @@ const overlayFingerprints = [
 ];
 const intervuFingerprints = [relayFingerprint, ...overlayFingerprints];
 
-/** The fingerprints that occur in `text`. */
-const fingerprintsIn = (text: string): string[] =>
-  intervuFingerprints.filter((fingerprint) => text.includes(fingerprint));
+/** The owner's own markup, not intervu's: masked out before the search. */
+const ownerAttribute = /data-intervu-redact/g;
+
+/** The fingerprints that occur in `text`, the owner's own markup aside. */
+const fingerprintsIn = (text: string): string[] => {
+  const withoutOwnerMarkup = text.replace(ownerAttribute, "");
+  return intervuFingerprints.filter((fingerprint) =>
+    withoutOwnerMarkup.includes(fingerprint),
+  );
+};
 
 /** Every file under `dir`, recursively, keyed by its path relative to `dir`. */
 const readTree = async (dir: string): Promise<Map<string, string>> => {

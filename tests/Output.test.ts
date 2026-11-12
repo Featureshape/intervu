@@ -76,6 +76,36 @@ describe("Output.appSession", () => {
       help: "next",
     });
   });
+
+  it("slots the warning and the did-you-mean line before help, only when present", () => {
+    const view = Output.appSession({
+      help: "next",
+      didYouMean: "did you mean 'intervu https://app.test'?",
+      warning: "http://app.test:443 is an origin no browser will report",
+      status: "open",
+      origin: "http://app.test:443",
+      key: "abc",
+    });
+
+    expect(Object.keys(view)).toEqual([
+      "key",
+      "origin",
+      "status",
+      "warning",
+      "didYouMean",
+      "help",
+    ]);
+    const bare = Output.appSession({
+      key: "abc",
+      origin: "http://localhost:5173",
+      status: "open",
+      warning: undefined,
+      didYouMean: undefined,
+      help: "next",
+    });
+    expect("warning" in bare).toBe(false);
+    expect("didYouMean" in bare).toBe(false);
+  });
 });
 
 describe("Output.error", () => {
@@ -257,6 +287,39 @@ describe("Output.pollFeedback", () => {
   });
 });
 
+describe("Output.pollFeedback redaction marker", () => {
+  it("marks a redacted Feedback and omits the key otherwise", () => {
+    const feedback = (redacted: boolean | undefined) => ({
+      feedback: new Feedback({
+        message: "m",
+        annotations: [],
+        domSnapshot: "<x/>",
+        ...(redacted === undefined ? {} : { redacted }),
+      }),
+      snapshotPath: Option.some("/tmp/snap.html"),
+    });
+
+    const marked = Output.pollFeedback({
+      feedback: [feedback(true)],
+      help: "h",
+    });
+    expect(marked.feedback[0]).toMatchObject({ redacted: true });
+    expect(Object.keys(marked.feedback[0] ?? {})).toEqual([
+      "message",
+      "redacted",
+      "annotations",
+      "domSnapshotPath",
+    ]);
+
+    for (const plain of [feedback(false), feedback(undefined)]) {
+      const view = Output.pollFeedback({ feedback: [plain], help: "h" });
+      expect(
+        view.feedback[0] !== undefined && "redacted" in view.feedback[0],
+      ).toBe(false);
+    }
+  });
+});
+
 describe("Output.pollTimedOut", () => {
   it("shapes the distinct expiry view", () => {
     const view = Output.pollTimedOut({ help: "keep listening" });
@@ -337,6 +400,110 @@ describe("Output.setup", () => {
 
     expect(Object.keys(view)).toEqual(["hook", "help"]);
     expect("skill" in view).toBe(false);
+  });
+});
+
+describe("Output.status", () => {
+  it("shapes the daemon's answer, flattening refusal tallies per plugin", () => {
+    const view = Output.status({
+      help: "run a poll",
+      version: "0.3.1",
+      port: 51789,
+      stateDir: "/home/u/.local/state/intervu",
+      sessions: [
+        {
+          key: "0123456789abcdef",
+          kind: "app",
+          handle: "https://app.test",
+          status: "open",
+          presence: "listening",
+        },
+      ],
+      plugins: [
+        {
+          origin: "http://localhost:5173",
+          seenOrigins: ["https://app.test"],
+          refusals: [
+            {
+              reason: "foreign-page-origin",
+              pageOrigin: "https://app.test:8443",
+              count: 3,
+              lastAt: 1_700_000_000_000,
+            },
+          ],
+          lastSeenAt: 1_700_000_060_000,
+        },
+      ],
+      waitingOrigins: [
+        {
+          origin: "https://app.test:8443",
+          count: 41,
+          lastSeenAt: 1_700_000_050_000,
+        },
+      ],
+    });
+
+    expect(Object.keys(view)).toEqual([
+      "version",
+      "port",
+      "stateDir",
+      "sessions",
+      "plugins",
+      "refusals",
+      "waitingOrigins",
+      "help",
+    ]);
+    expect(view.waitingOrigins).toEqual([
+      {
+        origin: "https://app.test:8443",
+        count: 41,
+        lastSeenAt: "2023-11-14T22:14:10.000Z",
+      },
+    ]);
+    expect(view.sessions).toEqual([
+      {
+        key: "0123456789abcdef",
+        kind: "app",
+        handle: "https://app.test",
+        status: "open",
+        presence: "listening",
+      },
+    ]);
+    expect(view.plugins).toEqual([
+      {
+        origin: "http://localhost:5173",
+        seenOrigins: ["https://app.test"],
+        lastSeenAt: "2023-11-14T22:14:20.000Z",
+      },
+    ]);
+    expect(view.refusals).toEqual([
+      {
+        plugin: "http://localhost:5173",
+        reason: "foreign-page-origin",
+        pageOrigin: "https://app.test:8443",
+        count: 3,
+        lastAt: "2023-11-14T22:13:20.000Z",
+      },
+    ]);
+    expect(view.refusals[0] && "origin" in view.refusals[0]).toBe(false);
+  });
+});
+
+describe("Output.statusNoDaemon", () => {
+  it("answers no-daemon as a view, not an error", () => {
+    const view = Output.statusNoDaemon({
+      port: 51789,
+      stateDir: "/tmp/intervu-user",
+      help: "start one",
+    });
+
+    expect(view).toEqual({
+      daemon: "none",
+      port: 51789,
+      stateDir: "/tmp/intervu-user",
+      help: "start one",
+    });
+    expect(Object.keys(view)).toEqual(["daemon", "port", "stateDir", "help"]);
   });
 });
 

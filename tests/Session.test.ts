@@ -27,6 +27,7 @@ describe("Session kind", () => {
           path: "http://localhost:5173",
           status: "open",
           kind: "app",
+          lastActivityAt: 1_700_000_000_000,
         }),
       );
       expect(encoded.kind).toBe("app");

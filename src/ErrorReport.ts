@@ -6,6 +6,7 @@ import {
   BrowserAssetBuildError,
   ConflictingSetupScope,
   DaemonNotRunning,
+  DoctorChecksFailed,
   HomeDirectoryUnresolved,
   IntervuNotOnPath,
   ReviewNotOpen,
@@ -14,6 +15,7 @@ import {
   SettingsFileUnreadable,
   StaleDaemon,
   StaleServerTakeover,
+  VitePluginBuildError,
 } from "./Errors.ts";
 import * as Output from "./Output.ts";
 
@@ -65,6 +67,14 @@ export const report = (
         help: `start the app's dev server, then re-run 'intervu ${error.url}'`,
       }),
     );
+  }
+
+  // Already rendered, like a framework error: the doctor's per-check view -
+  // fix hints included - is the whole stdout document, and a second envelope
+  // would make it undecodable as one TOON doc. The failure only carries the
+  // non-zero exit.
+  if (error instanceof DoctorChecksFailed) {
+    return Option.none();
   }
 
   if (error instanceof ReviewNotOpen) {
@@ -123,6 +133,16 @@ export const report = (
         tag: error._tag,
         message: `browser asset build failed: ${error.reason}`,
         help: `check the daemon log at ${ctx.logFile}`,
+      }),
+    );
+  }
+
+  if (error instanceof VitePluginBuildError) {
+    return Option.some(
+      Output.error({
+        tag: error._tag,
+        message: `could not bundle the intervu/vite plugin from source: ${error.reason}`,
+        help: "fix the build error, then re-run 'intervu setup vite'",
       }),
     );
   }

@@ -97,6 +97,41 @@ export const runCli = (
     );
   });
 
+/**
+ * Run the CLI with full control of its `INTERVU_*` environment, for specs
+ * that drive their own daemons, state dirs or the port range rather than the
+ * harness daemon. The harness variables are stripped first; only what `env`
+ * names is set on top of the inherited environment.
+ */
+export const runCliRaw = (
+  args: readonly string[],
+  browser: BrowserRecorder,
+  env: Readonly<Record<string, string>>,
+): Promise<CliRun> =>
+  new Promise((resolve) => {
+    const child: NodeJS.ProcessEnv = {
+      ...process.env,
+      INTERVU_BROWSER: browser.command,
+    };
+    delete child.INTERVU_PORT;
+    delete child.INTERVU_STATE_DIR;
+    execFile(
+      "bun",
+      [nodePath.join(repoRoot, "src", "main.ts"), ...args],
+      { cwd: repoRoot, env: { ...child, ...env } },
+      (error, stdout, stderr) => {
+        const exitCode =
+          error === null ? 0 : typeof error.code === "number" ? error.code : 1;
+        resolve({
+          exitCode,
+          stdout,
+          stderr,
+          output: stdout.trim() === "" ? null : decode(stdout),
+        });
+      },
+    );
+  });
+
 const isJsonObject = (value: JsonValue): value is JsonObject =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 

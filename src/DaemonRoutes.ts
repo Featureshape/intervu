@@ -8,6 +8,9 @@
 /** The lookup route that answers which `app` Session is open for an origin. */
 export const appSessionPath = "/apps/session";
 
+/** The route the plugin pushes its sightings and refusal tallies to. */
+export const pluginReportPath = "/plugins/report";
+
 /** The `GET /apps/session` URL that asks about `origin`. */
 export const appSessionUrl = (origin: string): string =>
   `${appSessionPath}?${new URLSearchParams({ origin })}`;

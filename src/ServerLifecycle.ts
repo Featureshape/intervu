@@ -1,10 +1,12 @@
 import { openSync } from "node:fs";
 import {
+  Clock,
   Effect,
   FileSystem,
   Layer,
   Option,
   type PlatformError,
+  Ref,
   Schedule,
   type Schema,
 } from "effect";
@@ -28,6 +30,7 @@ import {
   Health,
   PollResponse,
   ReplyResponse,
+  StatusResponse,
 } from "./Protocol.ts";
 import { Session, type SessionKind } from "./Session.ts";
 
@@ -94,6 +97,7 @@ export const isStaleVersion = (
 
 type PollError =
   | ReviewNotOpen
+  | DaemonNotRunning
   | HttpClientError.HttpClientError
   | Schema.SchemaError;
 
@@ -142,6 +146,13 @@ export class ServerLifecycle extends Context.Service<
       message: string,
     ) => Effect.Effect<ReplyResponse, ReplyError>;
     readonly end: (path: string) => Effect.Effect<EndResponse, EndError>;
+    readonly status: Effect.Effect<
+      StatusResponse,
+      | DaemonNotRunning
+      | StaleDaemon
+      | HttpClientError.HttpClientError
+      | Schema.SchemaError
+    >;
   }
 >()("@intervu/ServerLifecycle") {
   static readonly layer = Layer.effect(
@@ -150,35 +161,107 @@ export class ServerLifecycle extends Context.Service<
       const client = yield* HttpClient.HttpClient;
       const config = yield* AppConfig;
       const fs = yield* FileSystem.FileSystem;
-      const baseUrl = `http://${config.hostname}:${config.port}`;
+      const urlOf = (port: number) => `http://${config.hostname}:${port}`;
 
-      // `BunHttpServer` binds the port before the routes are mounted and answers
-      // `404` for about 250ms in between, so a `404` from a daemon that is still
-      // starting is retried, briefly, rather than treated as a failure.
+      // The port my daemon answered on last, resolved once per command run:
+      // `ensure`/`requireHealthy` set it and every later request uses it.
+      const resolvedPort = yield* Ref.make(config.port);
+      const baseUrl = Ref.get(resolvedPort).pipe(Effect.map(urlOf));
+
+      // `BunHttpServer` binds the port before the routes are mounted and
+      // answers `404` for about 250ms in between, so a `404` from a daemon
+      // that is still starting is retried, briefly, rather than read as
+      // nobody home. A refused connection fails fast with no retry, so a
+      // ten-port scan of dead ports stays cheap.
       const isStarting = (
-        error: HttpClientError.HttpClientError | Schema.SchemaError,
+        error:
+          | HttpClientError.HttpClientError
+          | Schema.SchemaError
+          | { readonly _tag: string },
       ) =>
         HttpClientError.isHttpClientError(error) &&
         error.reason._tag === "StatusCodeError" &&
         error.reason.response.status === 404;
 
-      const ping = client
-        .execute(HttpClientRequest.get(`${baseUrl}/health`))
-        .pipe(
+      /** Whose daemon answers `port`, if any: `None` when nothing does. */
+      const healthAt = (port: number): Effect.Effect<Option.Option<Health>> =>
+        client.execute(HttpClientRequest.get(`${urlOf(port)}/health`)).pipe(
           Effect.flatMap(HttpClientResponse.filterStatusOk),
           Effect.flatMap(HttpClientResponse.schemaBodyJson(Health)),
+          Effect.timeout("1 second"),
           Effect.retry({
             while: isStarting,
             times: 20,
             schedule: Schedule.spaced("100 millis"),
           }),
+          Effect.map(Option.some),
+          Effect.orElseSucceed(() => Option.none<Health>()),
         );
 
-      const isConnRefused = (
-        error: HttpClientError.HttpClientError | Schema.SchemaError,
-      ) =>
-        HttpClientError.isHttpClientError(error) &&
-        error.reason._tag === "TransportError";
+      /**
+       * "Mine" means "same state dir". A daemon from before the identity
+       * fields names none; it predates coexistence, so it is treated as the
+       * single daemon it was - the version check then applies as always.
+       */
+      const isMine = (health: Health): boolean =>
+        health.stateDir === undefined || health.stateDir === config.stateDir;
+
+      // The client's memory of which range port its daemon bound, so later
+      // commands in the same agent session find it first. Best-effort cache:
+      // unreadable or stale contents just fall back to the scan.
+      const readPortFile: Effect.Effect<Option.Option<number>> = fs
+        .readFileString(config.portFile)
+        .pipe(
+          Effect.map((text) => {
+            const port = Number.parseInt(text.trim(), 10);
+            return config.ports.includes(port)
+              ? Option.some(port)
+              : Option.none<number>();
+          }),
+          Effect.orElseSucceed(() => Option.none<number>()),
+        );
+
+      const writePortFile = (port: number): Effect.Effect<void> =>
+        fs.makeDirectory(config.stateDir, { recursive: true }).pipe(
+          Effect.andThen(fs.writeFileString(config.portFile, `${port}\n`)),
+          Effect.catch((error) =>
+            Effect.logWarning("could not persist the daemon port", error),
+          ),
+        );
+
+      /** One daemon that is mine, found on the pinned port or the range. */
+      interface FoundDaemon {
+        readonly port: number;
+        readonly health: Health;
+      }
+
+      /**
+       * Find my daemon: the pinned port only when `INTERVU_PORT` is set
+       * (behaviour: no range scan), else the cached port first and then the
+       * range in order. A live daemon with another state dir is left alone -
+       * never reused, never evicted.
+       */
+      const findMine: Effect.Effect<Option.Option<FoundDaemon>> = Effect.gen(
+        function* () {
+          const cached = config.portPinned
+            ? Option.none<number>()
+            : yield* readPortFile;
+          const candidates = [
+            ...Option.match(cached, {
+              onNone: () => [] as number[],
+              onSome: (port) => [port],
+            }),
+            ...config.ports,
+          ].filter((port, index, all) => all.indexOf(port) === index);
+          for (const port of candidates) {
+            const health = yield* healthAt(port);
+            if (Option.isSome(health) && isMine(health.value)) {
+              return Option.some({ port, health: health.value });
+            }
+          }
+          return Option.none<FoundDaemon>();
+        },
+      );
 
       // Self-spawn `intervu server` detached, redirecting its output to the log
       // file. `unref` lets this CLI exit without waiting on the daemon.
@@ -199,18 +282,28 @@ export class ServerLifecycle extends Context.Service<
         });
       });
 
-      // Poll health until the freshly spawned daemon binds, capped at ~5s.
-      const waitHealthy = ping.pipe(
-        Effect.retry({
-          while: isConnRefused,
-          schedule: Schedule.spaced("100 millis"),
-        }),
-        Effect.timeout("5 seconds"),
-        Effect.catchTag(
-          "TimeoutError",
-          () => new ServerStartTimeout({ port: config.port }),
-        ),
-      );
+      // Scan until the freshly spawned daemon binds somewhere in my ports
+      // and answers as mine, capped at ~5s. The daemon picks its own port
+      // (the first free one in the range, or the pinned one).
+      const waitMine: Effect.Effect<FoundDaemon, ServerStartTimeout> =
+        findMine.pipe(
+          Effect.repeat({
+            schedule: Schedule.spaced("100 millis"),
+            until: Option.isSome,
+          }),
+          Effect.timeout("5 seconds"),
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                Effect.fail(new ServerStartTimeout({ port: config.port })),
+              onSome: (found) => Effect.succeed(found),
+            }),
+          ),
+          Effect.catchTag(
+            "TimeoutError",
+            () => new ServerStartTimeout({ port: config.port }),
+          ),
+        );
 
       // Read the shared `server.pid` and SIGTERM the daemon, the one channel
       // that works across the version gap (ADR 0015): every version writes the
@@ -238,102 +331,113 @@ export class ServerLifecycle extends Context.Service<
         return signalled ? Option.some(pid) : Option.none();
       });
 
-      // Probe whether the port is free: a `/health` answer (or any non-refused
-      // error) means the old daemon is still bound; a connection-refused means
-      // it is gone.
-      const probePortFree: Effect.Effect<boolean> = ping.pipe(
-        Effect.as(false),
-        Effect.catch((error) => Effect.succeed(isConnRefused(error))),
-      );
-
-      // After SIGTERM, wait for the stale daemon to release the port, capped at
-      // ~5s. If it will not exit in that window the takeover cannot proceed.
-      const waitPortFree = probePortFree.pipe(
-        Effect.repeat({
-          schedule: Schedule.spaced("100 millis"),
-          until: (free) => free,
-        }),
-        Effect.timeout("5 seconds"),
-        Effect.catchTag("TimeoutError", () =>
-          Effect.fail(
-            new StaleServerTakeover({
-              port: config.port,
-              reason:
-                "the stale daemon did not exit within the takeover window",
-            }),
+      // After SIGTERM, wait for the stale daemon to release its port, capped
+      // at ~5s. If it will not exit in that window the takeover cannot proceed.
+      const waitPortFree = (port: number) =>
+        healthAt(port).pipe(
+          Effect.map(Option.isNone),
+          Effect.repeat({
+            schedule: Schedule.spaced("100 millis"),
+            until: (free) => free,
+          }),
+          Effect.timeout("5 seconds"),
+          Effect.catchTag("TimeoutError", () =>
+            Effect.fail(
+              new StaleServerTakeover({
+                port,
+                reason:
+                  "the stale daemon did not exit within the takeover window",
+              }),
+            ),
           ),
+        );
+
+      // Evict a strictly-older daemon of mine and spawn our own (ADR 0015):
+      // signal via the state dir's pidfile - mine by construction - wait for
+      // its port to free, then spawn and wait for the new daemon. A missing or
+      // garbage pidfile (nothing to signal) means the old daemon is orphaned
+      // on the port and the client refuses to spawn into it.
+      const takeover = (port: number) =>
+        Effect.gen(function* () {
+          const signalled = yield* signalStop;
+          if (Option.isNone(signalled)) {
+            return yield* Effect.fail(
+              new StaleServerTakeover({
+                port,
+                reason:
+                  "a stale daemon holds the port but its pidfile is missing or invalid",
+              }),
+            );
+          }
+          yield* waitPortFree(port);
+          yield* spawnDaemon;
+          return yield* waitMine;
+        });
+
+      /** Remember where my daemon answered, for this run and the next one. */
+      const adopt = (found: FoundDaemon) =>
+        Effect.gen(function* () {
+          yield* Ref.set(resolvedPort, found.port);
+          if (!config.portPinned) {
+            yield* writePortFile(found.port);
+          }
+          return found.health;
+        });
+
+      // The `open` path (ADR 0015, extended for the port range): find my
+      // daemon (same state dir; a foreign daemon on a port is left alone),
+      // spawn one when none answers - the daemon binds the first free range
+      // port itself - and take over a strictly-older daemon of mine. A
+      // freshly spawned daemon is our own version, so it is never stale.
+      const ensure = findMine.pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => spawnDaemon.pipe(Effect.flatMap(() => waitMine)),
+            onSome: (found) => Effect.succeed(found),
+          }),
         ),
+        Effect.flatMap((found) =>
+          isStaleVersion(found.health.version, config.version)
+            ? takeover(found.port)
+            : Effect.succeed(found),
+        ),
+        Effect.flatMap(adopt),
       );
 
-      // Evict a strictly-older daemon and spawn our own (ADR 0015): signal via
-      // the pidfile, wait for the port to free, then spawn and wait healthy. A
-      // missing/garbage pidfile (nothing to signal) means the old daemon is
-      // orphaned on the port and the client refuses to spawn into it.
-      const takeover = Effect.gen(function* () {
-        const signalled = yield* signalStop;
-        if (Option.isNone(signalled)) {
-          return yield* Effect.fail(
-            new StaleServerTakeover({
-              port: config.port,
-              reason:
-                "a stale daemon holds the port but its pidfile is missing or invalid",
-            }),
-          );
-        }
-        yield* waitPortFree;
-        yield* spawnDaemon;
-        return yield* waitHealthy;
-      });
-
-      // The `open` path (ADR 0015): spawn when nothing answers, otherwise reuse
-      // a healthy equal-or-newer daemon and take over a strictly-older one. The
-      // conn-refused catch sits on `ping` so it narrows the original infra-error
-      // union; the version check follows, and a freshly spawned daemon is our own
-      // version, so it is never seen as stale.
-      const ensure = ping.pipe(
-        Effect.catch((error) =>
-          isConnRefused(error)
-            ? spawnDaemon.pipe(Effect.flatMap(() => waitHealthy))
-            : Effect.fail(error),
+      // The poll/end path: a healthy daemon of mine must already exist -
+      // these never spawn one (ADR 0009), so none found is a definitive
+      // `DaemonNotRunning`. The same version predicate runs, but a
+      // strictly-older daemon is a refuse-and-redirect `StaleDaemon` (re-run
+      // `intervu <file>` to take over) rather than an inline takeover on the
+      // long-poll hot path.
+      const requireHealthy = findMine.pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () => Effect.fail(new DaemonNotRunning()),
+            onSome: (found) => Effect.succeed(found),
+          }),
         ),
-        Effect.flatMap((health) =>
-          isStaleVersion(health.version, config.version)
-            ? takeover
-            : Effect.succeed(health),
-        ),
-      );
-
-      // The poll/end path: a healthy daemon must already exist - these never
-      // spawn one (ADR 0009), so a refused connection is a definitive
-      // `DaemonNotRunning`. The same version predicate runs, but a strictly-older
-      // daemon is a refuse-and-redirect `StaleDaemon` (re-run `intervu <file>` to
-      // take over) rather than an inline takeover on the long-poll hot path.
-      const requireHealthy = ping.pipe(
-        Effect.mapError((error) =>
-          isConnRefused(error) ? new DaemonNotRunning() : error,
-        ),
-        Effect.flatMap((health) =>
-          isStaleVersion(health.version, config.version)
+        Effect.flatMap((found) =>
+          isStaleVersion(found.health.version, config.version)
             ? Effect.fail(new StaleDaemon())
-            : Effect.succeed(health),
+            : adopt(found),
         ),
       );
 
       const openSession = (path: string, kind: SessionKind) =>
         Effect.gen(function* () {
-          const request = HttpClientRequest.post(`${baseUrl}/sessions`).pipe(
-            HttpClientRequest.bodyJsonUnsafe({ path, kind }),
-          );
+          const request = HttpClientRequest.post(
+            `${yield* baseUrl}/sessions`,
+          ).pipe(HttpClientRequest.bodyJsonUnsafe({ path, kind }));
           const response = yield* client.execute(request);
           return yield* HttpClientResponse.schemaBodyJson(Session)(response);
         });
 
-      // Long-poll: hold a single request open until the daemon returns the
-      // drained Feedback (or the `timedOut` marker). A `404` means nothing is
-      // open at this path - a structured `ReviewNotOpen`, not feedback. The
-      // request carries no response timeout, so an indefinite block is not
-      // severed client-side.
-      const poll = (
+      // One poll request, held open until the daemon settles it. A `404`
+      // means nothing is open at this path - a structured `ReviewNotOpen`,
+      // not feedback. No client-side response timeout, so an indefinite
+      // block is not severed by this side.
+      const pollOnce = (
         path: string,
         timeoutSeconds: Option.Option<number>,
         agentReply: Option.Option<string>,
@@ -347,7 +451,7 @@ export class ServerLifecycle extends Context.Service<
             onNone: () => withTimeout,
             onSome: (reply) => ({ ...withTimeout, agentReply: reply }),
           });
-          const request = HttpClientRequest.post(`${baseUrl}/poll`).pipe(
+          const request = HttpClientRequest.post(`${yield* baseUrl}/poll`).pipe(
             HttpClientRequest.bodyJsonUnsafe(body),
           );
           const response = yield* client.execute(request);
@@ -359,12 +463,71 @@ export class ServerLifecycle extends Context.Service<
           );
         });
 
+      /** A connection that died without a decoded response - not an answer. */
+      const isTransportDrop = (
+        error: PollError,
+      ): error is HttpClientError.HttpClientError =>
+        HttpClientError.isHttpClientError(error) &&
+        error.reason._tag === "TransportError";
+
+      // Long-poll with client-side reconnect: the poll response is a single
+      // TOON document, so the wire cannot carry keepalives - a proxy that
+      // cuts idle connections kills the request instead. A transport drop
+      // without a decoded response re-issues the same poll silently,
+      // preserving any remaining `--timeout` budget; only a daemon that
+      // stops answering `/health` turns the drop into a structured
+      // `DaemonNotRunning`. The agent-reply rides only the first request,
+      // since the daemon posted it before the wait began.
+      const poll = (
+        path: string,
+        timeoutSeconds: Option.Option<number>,
+        agentReply: Option.Option<string>,
+      ) =>
+        Effect.gen(function* () {
+          const startedAt = yield* Clock.currentTimeMillis;
+          let reply = agentReply;
+          while (true) {
+            const now = yield* Clock.currentTimeMillis;
+            const remaining = Option.map(timeoutSeconds, (total) =>
+              Math.ceil(total - (now - startedAt) / 1000),
+            );
+            if (Option.isSome(remaining) && remaining.value <= 0) {
+              return new PollResponse({
+                timedOut: true,
+                ended: false,
+                feedback: [],
+              });
+            }
+            const attempt = yield* pollOnce(path, remaining, reply).pipe(
+              Effect.map(Option.some),
+              Effect.catch((error) =>
+                isTransportDrop(error)
+                  ? Effect.succeed(Option.none<PollResponse>())
+                  : Effect.fail(error),
+              ),
+            );
+            if (Option.isSome(attempt)) {
+              return attempt.value;
+            }
+            reply = Option.none();
+            const alive = yield* Ref.get(resolvedPort).pipe(
+              Effect.flatMap(healthAt),
+            );
+            if (Option.isNone(alive)) {
+              return yield* Effect.fail(new DaemonNotRunning());
+            }
+            // A short breath between re-issues, so a path that drops
+            // instantly (while /health still answers) cannot spin hot.
+            yield* Effect.sleep("250 millis");
+          }
+        });
+
       // End from the terminal (ADR 0011): the agent-facing thin client over
       // `POST /end`. Path-addressed and lookup-without-create, so a `404` is a
       // structured `ReviewNotOpen` - the daemon is up but nothing is open here.
       const end = (path: string) =>
         Effect.gen(function* () {
-          const request = HttpClientRequest.post(`${baseUrl}/end`).pipe(
+          const request = HttpClientRequest.post(`${yield* baseUrl}/end`).pipe(
             HttpClientRequest.bodyJsonUnsafe({ path }),
           );
           const response = yield* client.execute(request);
@@ -380,9 +543,9 @@ export class ServerLifecycle extends Context.Service<
       // lookup-without-create, so a `404` is a structured `ReviewNotOpen`.
       const reply = (path: string, message: string) =>
         Effect.gen(function* () {
-          const request = HttpClientRequest.post(`${baseUrl}/reply`).pipe(
-            HttpClientRequest.bodyJsonUnsafe({ path, message }),
-          );
+          const request = HttpClientRequest.post(
+            `${yield* baseUrl}/reply`,
+          ).pipe(HttpClientRequest.bodyJsonUnsafe({ path, message }));
           const response = yield* client.execute(request);
           if (response.status === 404) {
             return yield* new ReviewNotOpen({ path });
@@ -392,6 +555,19 @@ export class ServerLifecycle extends Context.Service<
           );
         });
 
+      // The live diagnostics read (`intervu status`): a healthy, current
+      // daemon must already exist - `requireHealthy` turns a refused
+      // connection into `DaemonNotRunning` and a strictly-older daemon
+      // (which has no `/status` route) into `StaleDaemon` before the read.
+      const status = requireHealthy.pipe(
+        Effect.flatMap(() => baseUrl),
+        Effect.flatMap((url) =>
+          client.execute(HttpClientRequest.get(`${url}/status`)),
+        ),
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        Effect.flatMap(HttpClientResponse.schemaBodyJson(StatusResponse)),
+      );
+
       return {
         ensure,
         requireHealthy,
@@ -400,6 +576,7 @@ export class ServerLifecycle extends Context.Service<
         poll,
         reply,
         end,
+        status,
       };
     }),
   );

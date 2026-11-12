@@ -55,7 +55,9 @@ const lookup = async (
   origin = "http://localhost:5173",
 ): Promise<{ status: number; body: unknown }> => {
   const relayPort = await listen((_request, response) =>
-    answerSessionLookup(response, daemonPort, origin),
+    answerSessionLookup(response, [daemonPort], origin, (message) =>
+      warnings.push(message),
+    ),
   );
   const response = await fetch(`http://127.0.0.1:${relayPort}/`);
   return { status: response.status, body: await response.json() };
@@ -152,7 +154,7 @@ const postFeedback = async (
     relayToOwnSession(
       request,
       response,
-      daemonPort,
+      [daemonPort],
       "http://localhost:5173",
       key,
       path,

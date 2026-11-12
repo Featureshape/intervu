@@ -1,4 +1,5 @@
 import {
+  Clock,
   Crypto,
   Effect,
   Layer,
@@ -67,6 +68,14 @@ export class SessionStore extends Context.Service<
       key: SessionKey,
       afterSeq: number,
     ) => Effect.Effect<readonly ConversationEntry[]>;
+    /** Bump `lastActivityAt` and persist; unknown keys are a no-op. */
+    readonly touch: (key: SessionKey) => Effect.Effect<void, StoreError>;
+    /**
+     * Flip every `open` Session idle past `ttlMs` to `ended` and persist.
+     * Returns how many it flipped; the sweep merely tidies - expiry is
+     * computed wherever Sessions are read.
+     */
+    readonly sweepExpired: (ttlMs: number) => Effect.Effect<number, StoreError>;
   }
 >()("@intervu/SessionStore") {
   static readonly layer = Layer.effect(
@@ -107,27 +116,31 @@ export class SessionStore extends Context.Service<
         return yield* SynchronizedRef.modifyEffect(ref, (sessions) =>
           Effect.gen(function* () {
             const key = yield* deriveKey(path);
+            const now = yield* Clock.currentTimeMillis;
             const existing = sessions.find((session) => session.key === key);
             if (existing !== undefined) {
-              if (existing.status === "open") {
-                // Idempotent re-open: resume the Session, no duplicate state.
-                return [existing, sessions] as const;
-              }
-              // Resurrect an `ended` Session to `open` (ADR 0012): same key, no
-              // duplicate state, so re-running `intervu <file>` revives a review.
-              const resurrected = new Session({
+              // Re-open resumes, resurrect revives (ADR 0012); either way the
+              // open is activity, so `lastActivityAt` bumps and persists.
+              const reopened = new Session({
                 key,
                 path,
                 status: "open",
                 kind: existing.kind,
+                lastActivityAt: now,
               });
               const next = sessions.map((session) =>
-                session.key === key ? resurrected : session,
+                session.key === key ? reopened : session,
               );
               yield* persistence.save(next);
-              return [resurrected, next] as const;
+              return [reopened, next] as const;
             }
-            const session = new Session({ key, path, status: "open", kind });
+            const session = new Session({
+              key,
+              path,
+              status: "open",
+              kind,
+              lastActivityAt: now,
+            });
             const next = [...sessions, session];
             yield* persistence.save(next);
             return [session, next] as const;
@@ -151,12 +164,66 @@ export class SessionStore extends Context.Service<
               path: existing.path,
               status: "ended",
               kind: existing.kind,
+              lastActivityAt: yield* Clock.currentTimeMillis,
             });
             const next = sessions.map((session) =>
               session.key === key ? ended : session,
             );
             yield* persistence.save(next);
             return [undefined, next] as const;
+          }),
+        );
+      });
+
+      // Activity that is not a status change: feedback arriving, a poll
+      // starting, a reply posting. Bumps `lastActivityAt` and persists, so
+      // the idle TTL measures real inactivity; unknown keys are a no-op.
+      const touch = Effect.fn("SessionStore.touch")(function* (
+        key: SessionKey,
+      ) {
+        yield* SynchronizedRef.modifyEffect(ref, (sessions) =>
+          Effect.gen(function* () {
+            const existing = sessions.find((session) => session.key === key);
+            if (existing === undefined) {
+              return [undefined, sessions] as const;
+            }
+            const touched = new Session({
+              ...existing,
+              lastActivityAt: yield* Clock.currentTimeMillis,
+            });
+            const next = sessions.map((session) =>
+              session.key === key ? touched : session,
+            );
+            yield* persistence.save(next);
+            return [undefined, next] as const;
+          }),
+        );
+      });
+
+      // The daemon's tidy-up, on start and hourly: flip `open` Sessions idle
+      // past the TTL to `ended`, in one persisted pass. Reversible as every
+      // end is - re-opening the handle resurrects (ADR 0012).
+      const sweepExpired = Effect.fn("SessionStore.sweepExpired")(function* (
+        ttlMs: number,
+      ) {
+        return yield* SynchronizedRef.modifyEffect(ref, (sessions) =>
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis;
+            const expired = sessions.filter(
+              (session) =>
+                session.status === "open" &&
+                now - session.lastActivityAt > ttlMs,
+            );
+            if (expired.length === 0) {
+              return [0, sessions] as const;
+            }
+            const next = sessions.map((session) =>
+              expired.includes(session)
+                ? new Session({ ...session, status: "ended" })
+                : session,
+            );
+            yield* persistence.save(next);
+            return [expired.length, next] as const;
           }),
         );
       });
@@ -252,6 +319,8 @@ export class SessionStore extends Context.Service<
         takeFeedback,
         appendConversation,
         conversationSince,
+        touch,
+        sweepExpired,
       };
     }),
   );

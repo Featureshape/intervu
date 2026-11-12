@@ -17,8 +17,10 @@ import { AppConfig } from "./AppConfig.ts";
 import * as ArtifactAssets from "./ArtifactAssets.ts";
 import { ArtifactWatcher } from "./ArtifactWatcher.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
-import { appSessionPath } from "./DaemonRoutes.ts";
+import { DaemonBoundPort, DaemonIdentity } from "./DaemonIdentity.ts";
+import { appSessionPath, pluginReportPath } from "./DaemonRoutes.ts";
 import * as FeedbackWait from "./FeedbackWait.ts";
+import { PluginRegistry } from "./PluginRegistry.ts";
 import {
   AppSessionRequest,
   AppSessionResponse,
@@ -26,10 +28,13 @@ import {
   EndResponse,
   EndRiderRequest,
   OpenSessionRequest,
+  PluginReportRequest,
   PollRequest,
   PollResponse,
   ReplyRequest,
   ReplyResponse,
+  StatusResponse,
+  StatusSession,
   ValidFeedback,
 } from "./Protocol.ts";
 import { type Session, SessionKey } from "./Session.ts";
@@ -41,6 +46,7 @@ import {
 } from "./SessionHub.ts";
 import { SessionStore } from "./SessionStore.ts";
 import * as Sse from "./Sse.ts";
+import { isWebOrigin, WaitingOrigins } from "./WaitingOrigins.ts";
 
 /**
  * The daemon's HTTP surface (issues #3, #4). Routes are total - each handler
@@ -97,7 +103,13 @@ const healthRoute = HttpRouter.add(
   "/health",
   Effect.gen(function* () {
     const config = yield* AppConfig;
-    return HttpServerResponse.jsonUnsafe({ ok: true, version: config.version });
+    const identity = yield* DaemonIdentity;
+    return HttpServerResponse.jsonUnsafe({
+      ok: true,
+      version: config.version,
+      stateDir: config.stateDir,
+      instanceId: identity.instanceId,
+    });
   }),
 );
 
@@ -134,15 +146,30 @@ const appSessionRoute = HttpRouter.add(
   appSessionPath,
   Effect.gen(function* () {
     const store = yield* SessionStore;
+    const waiting = yield* WaitingOrigins;
     const query =
       yield* HttpServerRequest.schemaSearchParams(AppSessionRequest);
     const session = yield* store.getByPath(query.origin);
     const app = Option.filter(session, (found) => found.kind === "app");
+    // The waiting-origin memory rides the lookups that already happen: a
+    // `session: null` answer for a web origin records it as waiting, and a
+    // lookup that finds its open Session clears it. Non-origin queries (an
+    // artifact path, a stray client) are never worth remembering.
+    yield* Option.match(app, {
+      onNone: () =>
+        isWebOrigin(query.origin) ? waiting.miss(query.origin) : Effect.void,
+      onSome: (found) =>
+        found.status === "open" ? waiting.found(query.origin) : Effect.void,
+    });
     return HttpServerResponse.jsonUnsafe(
       AppSessionResponse.make({
         session: Option.match(app, {
           onNone: () => null,
-          onSome: (found) => ({ key: found.key, status: found.status }),
+          onSome: (found) => ({
+            key: found.key,
+            status: found.status,
+            lastActivityAt: found.lastActivityAt,
+          }),
         }),
       }),
     );
@@ -152,6 +179,82 @@ const appSessionRoute = HttpRouter.add(
     ),
     Effect.catch((error) =>
       Effect.logError(`GET ${appSessionPath} failed`, error).pipe(
+        Effect.as(HttpServerResponse.empty({ status: 500 })),
+      ),
+    ),
+  ),
+);
+
+/**
+ * The plugin's push channel: one `intervu/vite` plugin reporting its own
+ * origin, the page origins it has seen succeed, and its refusal tallies. The
+ * registry keeps it in memory only. A malformed report is a `400`; an old
+ * daemon has no such route, and the plugin reads that `404` as "old daemon"
+ * and keeps relaying.
+ */
+const pluginReportRoute = HttpRouter.add(
+  "POST",
+  pluginReportPath,
+  Effect.gen(function* () {
+    const registry = yield* PluginRegistry;
+    const body = yield* HttpServerRequest.schemaBodyJson(PluginReportRequest);
+    yield* registry.report(body);
+    return HttpServerResponse.jsonUnsafe({ ok: true });
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.logWarning(`POST ${pluginReportPath} rejected`, error).pipe(
+        Effect.as(HttpServerResponse.empty({ status: 400 })),
+      ),
+    ),
+  ),
+);
+
+/**
+ * The live diagnostics `intervu status` renders: the daemon describing itself
+ * (version, port, state dir), every Session with its Presence, and every
+ * plugin that has reported in. The Home view stays offline (ADR 0013); this
+ * is the one route that answers "what is intervu seeing right now?".
+ */
+const statusRoute = HttpRouter.add(
+  "GET",
+  "/status",
+  Effect.gen(function* () {
+    const config = yield* AppConfig;
+    const bound = yield* DaemonBoundPort;
+    const store = yield* SessionStore;
+    const hub = yield* SessionHub;
+    const registry = yield* PluginRegistry;
+    const waiting = yield* WaitingOrigins;
+    const sessions = yield* store.list;
+    const withPresence = yield* Effect.forEach(sessions, (session) =>
+      hub.presence(session.key).pipe(
+        Effect.map((presence) =>
+          StatusSession.make({
+            key: session.key,
+            kind: session.kind,
+            handle: session.path,
+            status: session.status,
+            presence,
+            lastActivityAt: session.lastActivityAt,
+          }),
+        ),
+      ),
+    );
+    const plugins = yield* registry.sightings;
+    const waitingOrigins = yield* waiting.list;
+    return yield* HttpServerResponse.schemaJson(StatusResponse)(
+      StatusResponse.make({
+        version: config.version,
+        port: bound.port,
+        stateDir: config.stateDir,
+        sessions: withPresence,
+        plugins,
+        waitingOrigins,
+      }),
+    );
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.logError("GET /status failed", error).pipe(
         Effect.as(HttpServerResponse.empty({ status: 500 })),
       ),
     ),
@@ -283,6 +386,7 @@ const feedbackRoute = HttpRouter.add(
       const store = yield* SessionStore;
       const hub = yield* SessionHub;
       const feedback = yield* HttpServerRequest.schemaBodyJson(ValidFeedback);
+      yield* store.touch(session.key);
       yield* store.queueFeedback(session.key, feedback);
       yield* hub.publish(session.key, new FeedbackQueued());
       const entry = yield* store.appendConversation(session.key, {
@@ -358,6 +462,7 @@ const pollRoute = HttpRouter.add(
       onSome: (open) =>
         Effect.scoped(
           Effect.gen(function* () {
+            yield* store.touch(open.key);
             yield* postAgentReply(open.key, request.agentReply ?? "");
             const outcome = yield* FeedbackWait.wait(open.key, {
               timeout: Option.map(
@@ -408,6 +513,9 @@ const replyRoute = HttpRouter.add(
       onSome: (open) =>
         Effect.gen(function* () {
           const ended = open.status === "ended";
+          if (!ended) {
+            yield* store.touch(open.key);
+          }
           const posted = ended
             ? false
             : yield* postAgentReply(open.key, request.message);
@@ -658,6 +766,8 @@ export const layer = HttpRouter.serve(
     healthRoute,
     sessionsRoute,
     appSessionRoute,
+    pluginReportRoute,
+    statusRoute,
     chromeRoute,
     artifactRoute,
     sourceRoute,

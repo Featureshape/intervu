@@ -8,12 +8,17 @@ import { SessionKind, SessionStatus } from "./Session.ts";
  */
 
 /**
- * `GET /health` response. `version` is present now so the later
- * stale-server-takeover slice (#27) has its handshake field.
+ * `GET /health` response. `version` backs the stale-server takeover (ADR
+ * 0015). `stateDir` and `instanceId` name whose daemon this is: "mine" means
+ * "same state dir", so clients and plugins can tell a sandbox-mate's daemon
+ * from their own on the shared port range. Optional on the wire - a daemon
+ * from before the fields answers without them.
  */
 export class Health extends Schema.Class<Health>("Health")({
   ok: Schema.Boolean,
   version: Schema.String,
+  stateDir: Schema.optional(Schema.String),
+  instanceId: Schema.optional(Schema.String),
 }) {}
 
 /**
@@ -48,7 +53,16 @@ export class AppSessionResponse extends Schema.Class<AppSessionResponse>(
   "AppSessionResponse",
 )({
   session: Schema.NullOr(
-    Schema.Struct({ key: Schema.String, status: SessionStatus }),
+    Schema.Struct({
+      key: Schema.String,
+      status: SessionStatus,
+      /**
+       * When the Session was last active (epoch ms). The relay uses it to
+       * pick the fresher daemon when two hold an open Session for one
+       * origin; optional, absent from older daemons.
+       */
+      lastActivityAt: Schema.optional(Schema.Number),
+    }),
   ),
 }) {}
 
@@ -99,6 +113,12 @@ export class Feedback extends Schema.Class<Feedback>("Feedback")({
   message: Schema.String,
   annotations: Schema.Array(Annotation),
   domSnapshot: Schema.String,
+  /**
+   * Present and `true` when the page masked its snapshot and annotation text
+   * before sending (owner-configured redaction), so the poll can mark the
+   * placeholders as deliberate. Absent from older overlays.
+   */
+  redacted: Schema.optional(Schema.Boolean),
 }) {}
 
 /**
@@ -113,6 +133,44 @@ export const ValidFeedback = Feedback.check(
       : "feedback needs a non-empty message or at least one annotation",
   ),
 );
+
+/**
+ * One tallied refusal in a plugin-report: the guard's rejection code, the
+ * origins the refused request presented (absent when it presented none), how
+ * often it happened and when it last did (epoch milliseconds, the plugin's
+ * clock).
+ */
+export class PluginRefusalTally extends Schema.Class<PluginRefusalTally>(
+  "PluginRefusalTally",
+)({
+  reason: Schema.String,
+  origin: Schema.optional(Schema.String),
+  pageOrigin: Schema.optional(Schema.String),
+  count: Schema.Number,
+  lastAt: Schema.Number,
+}) {}
+
+/**
+ * `POST /plugins/report` request body: what one `intervu/vite` plugin has seen
+ * since its dev server started - its own origin, the page origins whose relay
+ * requests passed the guard, and its refusal tallies. Sent on dev server
+ * start, every 30s while any tab holds a relay connection, and promptly after
+ * a refusal or a newly seen page origin. The daemon keeps it in memory only.
+ */
+export class PluginReportRequest extends Schema.Class<PluginReportRequest>(
+  "PluginReportRequest",
+)({
+  origin: Schema.String,
+  seenOrigins: Schema.Array(Schema.String),
+  refusals: Schema.Array(PluginRefusalTally),
+}) {}
+
+/** `POST /plugins/report` response body: the report was taken. */
+export class PluginReportResponse extends Schema.Class<PluginReportResponse>(
+  "PluginReportResponse",
+)({
+  ok: Schema.Boolean,
+}) {}
 
 /**
  * `POST /poll` request body (ADR 0009): the artifact's resolved realpath, which
@@ -159,6 +217,63 @@ export class ConversationEntry extends Schema.Class<ConversationEntry>(
  */
 export const Presence = Schema.Literals(["idle", "listening", "working"]);
 export type Presence = typeof Presence.Type;
+
+/** One Session as `GET /status` reports it, with its live Presence. */
+export class StatusSession extends Schema.Class<StatusSession>("StatusSession")(
+  {
+    key: Schema.String,
+    kind: SessionKind,
+    handle: Schema.String,
+    status: SessionStatus,
+    presence: Presence,
+    /** Last activity (epoch ms); optional, absent from older daemons. */
+    lastActivityAt: Schema.optional(Schema.Number),
+  },
+) {}
+
+/**
+ * One reporting plugin as `GET /status` reports it: the report it last sent
+ * plus `lastSeenAt`, when the daemon took it (epoch milliseconds, the
+ * daemon's clock).
+ */
+export class StatusPlugin extends Schema.Class<StatusPlugin>("StatusPlugin")({
+  origin: Schema.String,
+  seenOrigins: Schema.Array(Schema.String),
+  refusals: Schema.Array(PluginRefusalTally),
+  lastSeenAt: Schema.Number,
+}) {}
+
+/**
+ * One origin a browser keeps asking for with no Session to find: how often
+ * its `GET /apps/session` lookup answered `session: null` and when it last
+ * did (epoch milliseconds, the daemon's clock).
+ */
+export class WaitingOrigin extends Schema.Class<WaitingOrigin>("WaitingOrigin")(
+  {
+    origin: Schema.String,
+    count: Schema.Number,
+    lastSeenAt: Schema.Number,
+  },
+) {}
+
+/**
+ * `GET /status` response body: the daemon describing itself - version, port
+ * and state dir - plus its Sessions with Presence, every plugin that has
+ * reported in, and the origins whose browsers are looking for a Session.
+ * `intervu status` renders this; the Home view stays offline (ADR 0013).
+ */
+export class StatusResponse extends Schema.Class<StatusResponse>(
+  "StatusResponse",
+)({
+  version: Schema.String,
+  port: Schema.Number,
+  stateDir: Schema.String,
+  sessions: Schema.Array(StatusSession),
+  plugins: Schema.Array(StatusPlugin),
+  // Optional on the wire: a still-running daemon from the build before this
+  // field must not fail a newer CLI's `intervu status` decode mid-upgrade.
+  waitingOrigins: Schema.optional(Schema.Array(WaitingOrigin)),
+}) {}
 
 /**
  * `POST /poll` response body (ADR 0009 / 0011): the drained feedback (possibly

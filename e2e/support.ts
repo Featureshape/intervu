@@ -82,6 +82,15 @@ export const commandsAppUrl = `http://localhost:${commandsAppPort}`;
 export const compilerAppPort = 52015;
 export const compilerAppUrl = `http://localhost:${compilerAppPort}`;
 
+/**
+ * The same fixture app with `intervu({ redact: true })`
+ * (`vite.redact.config.ts`), wired to the harness daemon, for the redaction
+ * spec: its snapshots and annotation text leave the page masked, so no other
+ * spec may assert readable content from this origin.
+ */
+export const redactedAppPort = 52017;
+export const redactedAppUrl = `http://localhost:${redactedAppPort}`;
+
 /** A port no app listens on, for `intervu <url>` to find nothing at. */
 export const unreachableAppUrl = "http://localhost:51996";
 

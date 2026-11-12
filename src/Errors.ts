@@ -145,3 +145,27 @@ export class AppUnreachable extends Schema.TaggedErrorClass<AppUnreachable>()(
     url: Schema.String,
   },
 ) {}
+
+/**
+ * `intervu setup vite` could not bundle the plugin from source (dev runs
+ * only; the shipped binary writes the baked copy and never builds).
+ */
+export class VitePluginBuildError extends Schema.TaggedErrorClass<VitePluginBuildError>()(
+  "VitePluginBuildError",
+  {
+    reason: Schema.String,
+  },
+) {}
+
+/**
+ * `intervu doctor <url>` found failing checks. The per-check verdicts with
+ * their fix hints are already on stdout; this failure makes the run exit
+ * non-zero, so a script can gate on it.
+ */
+export class DoctorChecksFailed extends Schema.TaggedErrorClass<DoctorChecksFailed>()(
+  "DoctorChecksFailed",
+  {
+    origin: Schema.String,
+    failed: Schema.Number,
+  },
+) {}

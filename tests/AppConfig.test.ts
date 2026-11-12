@@ -1,3 +1,4 @@
+import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as BunPath from "@effect/platform-bun/BunPath";
 import { describe, expect, it } from "@effect/vitest";
 import { ConfigProvider, Effect, Layer, Option } from "effect";
@@ -9,6 +10,7 @@ const configFrom = (env: Record<string, string>) =>
   AppConfig.layer.pipe(
     Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env }))),
     Layer.provide(BunPath.layer),
+    Layer.provide(BunFileSystem.layer),
   );
 
 describe("AppConfig.browser", () => {

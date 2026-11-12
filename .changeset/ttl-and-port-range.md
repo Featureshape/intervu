@@ -1,0 +1,5 @@
+---
+"intervu": minor
+---
+
+Sessions expire and daemons coexist. Every Session persists `lastActivityAt` - bumped by open, feedback, poll, reply and end - and one idle past the TTL (default 24h, `INTERVU_SESSION_TTL` in seconds) counts as `ended`: the Home view omits it, the daemon sweeps on start and hourly, and re-opening the handle resurrects it. State files from older versions load with the field defaulted to the load time, so nothing expires on the first read after an upgrade. The fixed port 51789 becomes the range 51789-51798: a daemon binds the first free port, `/health` names its state dir and instance id, a client finding a stranger's daemon on a port leaves it alone and remembers where its own daemon bound, and the Vite plugin fans its lookups and reports out across the whole range - when two daemons hold an open Session for one origin, the relay uses the most recently active and logs a warning naming both ports. An explicit `INTERVU_PORT` pins everything to exactly that port, with no range scan.

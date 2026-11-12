@@ -1,12 +1,16 @@
 import { BunHttpServer, BunRuntime, BunServices } from "@effect/platform-bun";
 import {
   Cause,
+  Clock,
   Console,
+  Duration,
   Effect,
   FileSystem,
   Layer,
   Option,
+  Path,
   Result,
+  Schedule,
 } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -17,20 +21,33 @@ import { ArtifactWatcher } from "./ArtifactWatcher.ts";
 import * as Browser from "./Browser.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
 import { CommandResolver } from "./CommandResolver.ts";
+import { DaemonBoundPort, DaemonIdentity } from "./DaemonIdentity.ts";
+import * as Doctor from "./Doctor.ts";
 import * as ErrorReport from "./ErrorReport.ts";
-import { ArtifactNotFound, ConflictingSetupScope } from "./Errors.ts";
+import {
+  ArtifactNotFound,
+  ConflictingSetupScope,
+  DoctorChecksFailed,
+  StaleServerTakeover,
+} from "./Errors.ts";
 import * as IdleShutdown from "./IdleShutdown.ts";
 import * as Output from "./Output.ts";
+import { PluginRegistry } from "./PluginRegistry.ts";
+import { firstFreePort } from "./PortBind.ts";
+import type { StatusResponse } from "./Protocol.ts";
 import * as Server from "./Server.ts";
 import { ServerLifecycle } from "./ServerLifecycle.ts";
 import type { SessionKind } from "./Session.ts";
 import { SessionHub } from "./SessionHub.ts";
 import { SessionPersistence } from "./SessionPersistence.ts";
 import { SessionStore } from "./SessionStore.ts";
+import { countsAsOpen } from "./SessionTtl.ts";
 import { Setup } from "./Setup.ts";
 import { SkillAsset } from "./SkillAsset.ts";
 import { SnapshotFiles } from "./SnapshotFiles.ts";
 import * as Toon from "./Toon.ts";
+import { VitePluginAsset } from "./VitePluginAsset.ts";
+import { WaitingOrigins, waitingElsewhere } from "./WaitingOrigins.ts";
 
 const bin = "intervu";
 const description =
@@ -52,9 +69,14 @@ const emit = (text: string): Effect.Effect<void> => Console.log(text);
  */
 const root = Command.make(bin, {}, () =>
   Effect.gen(function* () {
+    const config = yield* AppConfig;
     const persistence = yield* SessionPersistence;
-    const live = (yield* persistence.load).filter(
-      (session) => session.status === "open",
+    // Expiry is computed wherever Sessions are read: a Session idle past the
+    // TTL counts as `ended` here even before the daemon's sweep tidies it.
+    const now = yield* Clock.currentTimeMillis;
+    const ttlMs = Duration.toMillis(config.sessionTtl);
+    const live = (yield* persistence.load).filter((session) =>
+      countsAsOpen(session, now, ttlMs),
     );
 
     const view = Output.home({
@@ -168,6 +190,43 @@ const pluginHelp = (
   }
 };
 
+/** How fresh a plugin-report must be to outrank a failed probe. */
+const freshReportMs = 90_000;
+
+/**
+ * The plugin sighting that covers `origin`, when the daemon holds a fresh
+ * one: a plugin whose own origin is `origin`, or one that has seen a page on
+ * `origin` succeed. A probe the sandbox or a proxy blocks says `missing` or
+ * `refused`; a fresh sighting proves the plugin is alive and reporting, so
+ * the help line must not claim it is missing.
+ */
+const sightingCovering = (
+  plugins: readonly {
+    readonly origin: string;
+    readonly seenOrigins: readonly string[];
+    readonly lastSeenAt: number;
+  }[],
+  origin: string,
+  now: number,
+) =>
+  plugins.find(
+    (plugin) =>
+      now - plugin.lastSeenAt <= freshReportMs &&
+      (plugin.origin === origin || plugin.seenOrigins.includes(origin)),
+  );
+
+/**
+ * The help line when the probe failed but the daemon holds a fresh
+ * plugin-report covering `origin`: say what the plugin reported instead of
+ * the false "plugin missing" warning.
+ */
+const reportedPluginHelp = (
+  sighting: { readonly origin: string },
+  origin: string,
+  next: string,
+): string =>
+  `review open - the probe could not reach ${origin} from here, but its intervu Vite plugin (dev server ${sighting.origin}) is reporting to the daemon for this origin, so the overlay in the browser's tab can find the Session; ${next}`;
+
 /**
  * `intervu open <url>` (and the bare-URL alias): URL mode (ADR 0022). Fail fast
  * with `AppUnreachable` when nothing answers at the URL; otherwise ensure the
@@ -194,12 +253,50 @@ const openApp = Effect.fn("openApp")(function* (
     yield* Browser.openTab(app.url, config.browser);
   }
 
+  // One best-effort status read serves both enrichments below: a daemon that
+  // cannot answer it just leaves the probe's own answer standing.
+  const daemonStatus = yield* lifecycle.status.pipe(
+    Effect.map(Option.some),
+    Effect.orElseSucceed(() => Option.none<StatusResponse>()),
+  );
+  const now = yield* Clock.currentTimeMillis;
+
+  // A probe a sandbox or proxy blocks reads `missing` or `refused` even while
+  // the plugin is alive; a fresh plugin-report held by the daemon outranks it.
+  const sighting =
+    plugin === "missing" || plugin === "refused"
+      ? Option.flatMap(daemonStatus, (daemon) =>
+          Option.fromNullishOr(
+            sightingCovering(daemon.plugins, app.origin, now),
+          ),
+        )
+      : Option.none<{ readonly origin: string }>();
+
+  // A browser polling some other origin for a Session that is not there,
+  // while this open names none of them, is usually the agent opening the
+  // wrong origin - say so (behaviour: waiting origins, did-you-mean).
+  const didYouMean = Option.flatMap(daemonStatus, (daemon) =>
+    Option.fromNullishOr(
+      waitingElsewhere(daemon.waitingOrigins ?? [], app.origin, now),
+    ),
+  ).pipe(
+    Option.map(
+      (waitingOrigin) =>
+        `a browser at ${waitingOrigin} is looking for a session - did you mean 'intervu ${waitingOrigin}'?`,
+    ),
+  );
+
   const next = `run 'intervu poll ${session.path}' to receive feedback`;
   const view = Output.appSession({
     key: session.key,
     origin: session.path,
     status: session.status,
-    help: pluginHelp(plugin, session.path, next),
+    warning: Option.getOrUndefined(AppUrl.schemePortWarning(app)),
+    didYouMean: Option.getOrUndefined(didYouMean),
+    help: Option.match(sighting, {
+      onNone: () => pluginHelp(plugin, session.path, next),
+      onSome: (covered) => reportedPluginHelp(covered, session.path, next),
+    }),
   });
   yield* emit(yield* Toon.encode(view));
 });
@@ -371,13 +468,57 @@ const server = Command.make(
       const config = yield* AppConfig;
       const fs = yield* FileSystem.FileSystem;
       const hub = yield* SessionHub;
-      const boundPort = Option.getOrElse(port, () => config.port);
+      const store = yield* SessionStore;
+
+      // The bind target: the explicit flag, the pinned `INTERVU_PORT`, or -
+      // the coexistence rule - the first free port of the fixed range, so a
+      // daemon from another sandbox already on a port is left alone.
+      const boundPort = yield* Option.match(port, {
+        onSome: (flagged) => Effect.succeed(flagged),
+        onNone: () =>
+          config.portPinned
+            ? Effect.succeed(config.port)
+            : firstFreePort(config.hostname, config.ports).pipe(
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () =>
+                      Effect.fail(
+                        new StaleServerTakeover({
+                          port: config.port,
+                          reason: `every port in ${config.ports[0]}-${config.ports[config.ports.length - 1]} is taken`,
+                        }),
+                      ),
+                    onSome: (free) => Effect.succeed(free),
+                  }),
+                ),
+              ),
+      });
 
       yield* fs.makeDirectory(config.stateDir, { recursive: true });
       yield* fs.writeFileString(config.pidFile, `${process.pid}`);
 
+      // The idle-TTL sweep: tidy expired Sessions to `ended` on start, then
+      // hourly. Expiry is computed wherever Sessions are read; this only
+      // keeps the state file from accumulating long-dead `open` entries.
+      const sweep = store
+        .sweepExpired(Duration.toMillis(config.sessionTtl))
+        .pipe(
+          Effect.flatMap((flipped) =>
+            flipped > 0
+              ? Effect.logInfo(`swept ${flipped} idle Session(s) to ended`)
+              : Effect.void,
+          ),
+          Effect.catch((error) =>
+            Effect.logError("the Session sweep failed", error),
+          ),
+        );
+      yield* Effect.forkChild(
+        sweep.pipe(Effect.repeat(Schedule.spaced("1 hour"))),
+      );
+
       const serverLayer = Server.layer.pipe(
         Layer.provide(BrowserAssets.layer),
+        Layer.provide(Layer.succeed(DaemonBoundPort, { port: boundPort })),
         Layer.provide(
           BunHttpServer.layer({
             hostname: config.hostname,
@@ -407,6 +548,106 @@ const server = Command.make(
 );
 
 /**
+ * `intervu doctor <url>`: replay the overlay's exact Session lookup and print
+ * a per-check verdict - app reachable, plugin answering, guard verdict (with
+ * the rejection reason on a refusal), daemon reachable from the plugin, and
+ * whether an open Session matches the origin. A plain `curl` without
+ * `?origin=` once gave a false pass; doctor cannot, because it always sends
+ * what the overlay sends. Any failing check makes the run exit non-zero,
+ * after the verdicts - and their fix hints - are on stdout.
+ */
+const doctor = Command.make(
+  "doctor",
+  {
+    target: Argument.string("url").pipe(
+      Argument.filterMap(
+        AppUrl.parseAppUrl,
+        (raw) => `${raw} is not an http(s) URL`,
+      ),
+      Argument.withDescription(
+        "the reviewed app's URL, exactly as the browser reaches it",
+      ),
+    ),
+  },
+  ({ target }) =>
+    Effect.gen(function* () {
+      const diagnosis = yield* Doctor.diagnose(target);
+      const failed = Doctor.failedCount(diagnosis);
+
+      const view = Output.doctor({
+        url: target.url,
+        origin: target.origin,
+        checks: [
+          { check: "app-reachable", ...diagnosis.app },
+          { check: "plugin-answering", ...diagnosis.plugin },
+          { check: "guard", ...diagnosis.guard },
+          { check: "daemon-from-plugin", ...diagnosis.daemon },
+          { check: "open-session", ...diagnosis.session },
+        ],
+        help:
+          failed === 0
+            ? `every check passes - the overlay at ${target.origin} finds its Session`
+            : `${failed} of 5 checks failed - each failing check carries a fix hint`,
+      });
+      yield* emit(yield* Toon.encode(view));
+      if (failed > 0) {
+        return yield* Effect.fail(
+          new DoctorChecksFailed({ origin: target.origin, failed }),
+        );
+      }
+    }),
+);
+
+/**
+ * `intervu status`: the live diagnostics read. Unlike the offline Home view
+ * (ADR 0013), this one talks to the daemon: it prints the daemon's version,
+ * port and state dir, every Session with its Presence, every plugin that has
+ * reported in, and their refusal tallies - so the agent can see what the
+ * browser side sees without a human relaying the tab. No daemon on the port
+ * is an answer, not an error: `daemon: none` with the port it tried.
+ */
+const status = Command.make("status", {}, () =>
+  Effect.gen(function* () {
+    const config = yield* AppConfig;
+    const lifecycle = yield* ServerLifecycle;
+
+    const daemon = yield* lifecycle.status.pipe(
+      Effect.map(Option.some),
+      Effect.catchTag("DaemonNotRunning", () =>
+        Effect.succeed(Option.none<StatusResponse>()),
+      ),
+    );
+
+    const view = Option.match(daemon, {
+      onNone: () =>
+        Toon.encode(
+          Output.statusNoDaemon({
+            port: config.port,
+            stateDir: config.stateDir,
+            help: `no daemon is listening on port ${config.port} - run 'intervu <file|url>' to start one`,
+          }),
+        ),
+      onSome: (answer) =>
+        Toon.encode(
+          Output.status({
+            version: answer.version,
+            port: answer.port,
+            stateDir: answer.stateDir,
+            sessions: answer.sessions,
+            plugins: answer.plugins,
+            waitingOrigins: answer.waitingOrigins ?? [],
+            help:
+              answer.plugins.length === 0
+                ? "no plugin has reported in - a dev server with the intervu/vite plugin reports on start and while tabs are open"
+                : "run 'intervu poll <file|url>' on an open Session to receive feedback",
+          }),
+        ),
+    });
+    yield* emit(yield* view);
+  }),
+);
+
+/**
  * `intervu stop`: SIGTERM the daemon via the shared pidfile core
  * (`ServerLifecycle.signalStop`, the same channel takeover uses), which releases
  * the server gracefully. Idempotent (ADR 0014): with no daemon to signal - the
@@ -428,6 +669,47 @@ const stop = Command.make("stop", {}, () =>
         stopped: pid,
         help: "daemon received SIGTERM - it will exit shortly",
       }),
+    });
+    yield* emit(yield* Toon.encode(view));
+  }),
+);
+
+/**
+ * `intervu setup vite`: write the bundled dependency-free ESM plugin to
+ * `<project>/.intervu/vite.mjs` and print the exact import line and config
+ * edit for `vite.config.ts`. The binary carries the bundle (ADR 0007), so
+ * this needs no package manager and no network; it is idempotent, and it
+ * never edits the config itself - that one edit stays human.
+ */
+const setupVite = Command.make("vite", {}, () =>
+  Effect.gen(function* () {
+    const config = yield* AppConfig;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const asset = yield* VitePluginAsset;
+
+    const js = yield* asset.js;
+    const dir = path.join(config.currentDir, ".intervu");
+    const file = path.join(dir, "vite.mjs");
+    const existing = yield* fs.readFileString(file).pipe(Effect.option);
+    const action = Option.match(existing, {
+      onNone: () => "installed",
+      onSome: (content) => (content === js ? "already-present" : "installed"),
+    });
+    if (action === "installed") {
+      yield* fs.makeDirectory(dir, { recursive: true });
+      yield* fs.writeFileString(file, js);
+    }
+
+    const view = Output.setupVite({
+      action,
+      path: file,
+      importLine: 'import { intervu } from "./.intervu/vite.mjs";',
+      configEdit: "plugins: [intervu()] // beside your other plugins",
+      help:
+        action === "installed"
+          ? "add the import line and intervu() to plugins in vite.config.ts yourself - intervu never edits the config - then restart the dev server"
+          : "already written - the import line and the plugins entry in vite.config.ts stay yours to keep",
     });
     yield* emit(yield* Toon.encode(view));
   }),
@@ -489,10 +771,20 @@ const setup = Command.make(
       });
       yield* emit(yield* Toon.encode(view));
     }),
-);
+).pipe(Command.withSubcommands([setupVite]));
 
 const cli = root.pipe(
-  Command.withSubcommands([open, poll, reply, end, server, stop, setup]),
+  Command.withSubcommands([
+    open,
+    poll,
+    reply,
+    end,
+    server,
+    stop,
+    status,
+    doctor,
+    setup,
+  ]),
 );
 
 /**
@@ -508,6 +800,8 @@ const knownSubcommands = new Set([
   "end",
   "server",
   "stop",
+  "status",
+  "doctor",
   "setup",
 ]);
 const rawArgs = process.argv.slice(2);
@@ -530,6 +824,10 @@ const AppLayer = Layer.mergeAll(
   ArtifactWatcher.layer,
   Setup.layer,
   SnapshotFiles.layer,
+  PluginRegistry.layer,
+  WaitingOrigins.layer,
+  DaemonIdentity.layer,
+  VitePluginAsset.layer,
 ).pipe(
   Layer.provideMerge(SessionHub.layer),
   Layer.provideMerge(SessionPersistence.fileLayer),

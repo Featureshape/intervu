@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Clock, Effect, Schema } from "effect";
 
 /**
  * Stable identifier for a Session: the SHA-256 hex of its handle, truncated to
@@ -33,10 +33,18 @@ export type SessionKind = typeof SessionKind.Type;
  * and every command addresses the Session by it. The daemon's `SessionStore`
  * solely owns these (ADR 0002); they cross the HTTP boundary and persist to the
  * state file via the same schema.
+ *
+ * `lastActivityAt` (epoch milliseconds) is bumped by open, feedback, poll,
+ * reply and end, and backs the idle TTL: a Session past it counts as `ended`.
+ * A state file from before the field decodes it to the load time, so nothing
+ * expires on the first read after an upgrade.
  */
 export class Session extends Schema.Class<Session>("Session")({
   key: SessionKey,
   path: Schema.String,
   status: SessionStatus,
   kind: SessionKind,
+  lastActivityAt: Schema.Number.pipe(
+    Schema.withDecodingDefaultKey(Clock.currentTimeMillis),
+  ),
 }) {}

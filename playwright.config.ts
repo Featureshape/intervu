@@ -24,6 +24,8 @@ import {
   previousViteAppPort,
   previousViteAppUrl,
   previousViteBin,
+  redactedAppPort,
+  redactedAppUrl,
   reloadAppPort,
   reloadAppUrl,
   unusedDaemonPort,
@@ -136,6 +138,14 @@ export default defineConfig({
       config: "vite.no-plugin.config.ts",
       port: noPluginAppPort,
       url: noPluginAppUrl,
+      daemonPort,
+    }),
+    fixtureApp({
+      bin: viteBin,
+      dir: fixtureAppDir,
+      config: "vite.redact.config.ts",
+      port: redactedAppPort,
+      url: redactedAppUrl,
       daemonPort,
     }),
     fixtureApp({
