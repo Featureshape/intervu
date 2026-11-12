@@ -287,6 +287,39 @@ describe("Output.pollFeedback", () => {
   });
 });
 
+describe("Output.pollFeedback redaction marker", () => {
+  it("marks a redacted Feedback and omits the key otherwise", () => {
+    const feedback = (redacted: boolean | undefined) => ({
+      feedback: new Feedback({
+        message: "m",
+        annotations: [],
+        domSnapshot: "<x/>",
+        ...(redacted === undefined ? {} : { redacted }),
+      }),
+      snapshotPath: Option.some("/tmp/snap.html"),
+    });
+
+    const marked = Output.pollFeedback({
+      feedback: [feedback(true)],
+      help: "h",
+    });
+    expect(marked.feedback[0]).toMatchObject({ redacted: true });
+    expect(Object.keys(marked.feedback[0] ?? {})).toEqual([
+      "message",
+      "redacted",
+      "annotations",
+      "domSnapshotPath",
+    ]);
+
+    for (const plain of [feedback(false), feedback(undefined)]) {
+      const view = Output.pollFeedback({ feedback: [plain], help: "h" });
+      expect(
+        view.feedback[0] !== undefined && "redacted" in view.feedback[0],
+      ).toBe(false);
+    }
+  });
+});
+
 describe("Output.pollTimedOut", () => {
   it("shapes the distinct expiry view", () => {
     const view = Output.pollTimedOut({ help: "keep listening" });

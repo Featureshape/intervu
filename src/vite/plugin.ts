@@ -46,11 +46,26 @@ import {
  * `intervu` binary needs Bun (ADR 0018).
  */
 
+/** The app owner's options for intervu's URL mode. */
+export interface IntervuOptions {
+  /**
+   * Mask every snapshot and annotation text the page sends: letters to `x`,
+   * digits to `0`, length and structure preserved. The owner's switch for an
+   * app with personal data - it rides the overlay script's own URL, so
+   * nothing the agent or the CLI sends can turn it off. Markup under
+   * `data-intervu-redact` is masked even without it.
+   */
+  readonly redact?: boolean;
+}
+
 /** The Vite plugins that wire intervu's URL mode into the dev server. */
-export const intervu = (): Plugin[] => [overlayPlugin(), jsxSourcePlugin()];
+export const intervu = (options: IntervuOptions = {}): Plugin[] => [
+  overlayPlugin(options.redact === true),
+  jsxSourcePlugin(),
+];
 
 /** The overlay script and the relay it talks through. */
-const overlayPlugin = (): Plugin => ({
+const overlayPlugin = (redact: boolean): Plugin => ({
   name: "intervu",
   apply: "serve",
   configureServer(server) {
@@ -192,7 +207,9 @@ const overlayPlugin = (): Plugin => ({
         tag: "script",
         attrs: {
           type: "module",
-          src: `${relayPrefix}${overlayPath}`,
+          // `?redact=1` rides the script's own URL: the overlay reads it off
+          // `import.meta.url`, so redaction stays the app owner's config.
+          src: `${relayPrefix}${overlayPath}${redact ? "?redact=1" : ""}`,
           [ownMarkupAttribute]: "",
         },
         injectTo: "body",

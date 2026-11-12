@@ -222,6 +222,14 @@ test("selectors and the DOM snapshot carry nothing of intervu's", async ({
   expect(snapshot).not.toContain("intervu-overlay");
   expect(snapshot).not.toContain("data-intervu-own");
   expect(snapshot).not.toContain("/__intervu/");
+
+  // The `data-intervu-redact` region is masked in every snapshot, even with
+  // the plugin's `redact` option off - and only that region.
+  expect(snapshot).not.toContain("Ada Lovelace");
+  expect(snapshot).not.toContain("4111");
+  expect(snapshot).toContain("xxx xxxxxxxx");
+  expect(snapshot).toContain("0000 0000 0000 0000");
+  expect(snapshot).toContain('id="customer-name"');
 });
 
 test("annotations from two routes land in the origin's one Session", async ({

@@ -16,6 +16,12 @@ import {
   sessionPath,
 } from "../vite/relayPaths.ts";
 import { classifyLookup, type LookupState } from "./lookupState.ts";
+import {
+  maskText,
+  redactAttribute,
+  redactCapturedText,
+  redactSnapshot,
+} from "./redact.ts";
 import { trimSnapshot } from "./snapshot.ts";
 import {
   readDraft,
@@ -436,6 +442,14 @@ const tabStorage: TabStorage = {
 /** How often the dormant badge asks whether a Session has opened. */
 const sessionLookupIntervalMs = 1_000;
 
+/**
+ * Whether the app owner's plugin config redacts the whole page
+ * (`intervu({ redact: true })`). The plugin bakes it into this script's own
+ * URL, so it is the owner's switch: nothing the agent or the CLI sends can
+ * turn it off.
+ */
+const fullRedact = new URL(import.meta.url).searchParams.get("redact") === "1";
+
 /** The command that opens a URL-mode Session for this page's origin. */
 const openCommand = (): string => `intervu ${window.location.origin}`;
 
@@ -771,8 +785,26 @@ const appSnapshot = (): string => {
     own.remove();
   }
   trimSnapshot(copy);
+  // Masking happens here, in the browser, before anything leaves the page:
+  // the whole copy under the owner's `redact: true`, and the subtrees under
+  // `data-intervu-redact` regardless of configuration.
+  redactSnapshot(copy, fullRedact);
   return copy.outerHTML;
 };
+
+/** Whether this page's snapshots carry masked content at all. */
+const snapshotIsRedacted = (): boolean =>
+  fullRedact || document.querySelector(`[${redactAttribute}]`) !== null;
+
+/** An annotation with its captured page text masked, structure untouched. */
+const maskAnnotation = (annotation: Annotation): Annotation =>
+  annotation.kind === "text"
+    ? {
+        ...annotation,
+        text: maskText(annotation.text),
+        selectedText: maskText(annotation.selectedText),
+      }
+    : { ...annotation, text: maskText(annotation.text) };
 
 /** How much of a failed response's body the panel shows. */
 const failureDetailLimit = 160;
@@ -851,11 +883,13 @@ const postFeedback = async (
   message: string,
   annotations: readonly AppAnnotation[],
 ): Promise<SendOutcome> => {
+  // The human's typed message is never redacted: it carries their intent.
   const body = (domSnapshot: string): string =>
     JSON.stringify({
       message,
       annotations: annotations.map(toWire),
       domSnapshot,
+      ...(snapshotIsRedacted() ? { redacted: true } : {}),
     });
   const full = await postOnce(key, body(appSnapshot()));
   if (full.ok) {
@@ -1006,8 +1040,12 @@ const reviewControls = (
       return `annotation-${nextId}`;
     },
     onAnnotation: (annotation, anchor) => {
+      // Captured page text is masked at the capture itself, so unmasked PII
+      // never sits in the pending list or leaves the page.
       const item = {
-        annotation,
+        annotation: redactCapturedText(anchor, fullRedact)
+          ? maskAnnotation(annotation)
+          : annotation,
         source: sourceOf(anchor),
         pageUrl: window.location.href,
       };
