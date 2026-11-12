@@ -206,7 +206,7 @@ const reportedPluginHelp = (
   origin: string,
   next: string,
 ): string =>
-  `review open - the probe could not reach ${origin} from here, but its intervu Vite plugin (dev server ${sighting.origin}) is reporting to the daemon and has seen this origin succeed, so the overlay will find the Session; ${next}`;
+  `review open - the probe could not reach ${origin} from here, but its intervu Vite plugin (dev server ${sighting.origin}) is reporting to the daemon for this origin, so the overlay in the browser's tab can find the Session; ${next}`;
 
 /**
  * `intervu open <url>` (and the bare-URL alias): URL mode (ADR 0022). Fail fast
