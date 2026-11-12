@@ -80,6 +80,11 @@ With the plugin in place and no review open, the app shows a small "intervu: no 
 3. **Edit the app's source.**
    Vite's hot reload updates the human's view, and the panel keeps the Conversation and any unsent annotations.
 
+When anything in URL mode looks wrong, make these your first two moves before guessing:
+
+- **`intervu doctor <url>`** replays the browser's exact Session lookup and prints a per-check verdict - app reachable, plugin answering, guard verdict with the rejection reason, daemon reachable from the plugin, open Session - with a fix hint on every failing check.
+- **`intervu status`** asks the live daemon what it sees: the Sessions with the agent's Presence, every dev-server plugin that reported in, refusal tallies, and origins where a browser is waiting for a Session.
+
 These outcomes of `intervu <url>` need action from you:
 
 - **`AppUnreachable`** - nothing answered at the URL, and no Session was opened.
@@ -87,8 +92,8 @@ These outcomes of `intervu <url>` need action from you:
 - **A help line saying the Vite plugin is missing** - the Session is open, but the page cannot show the panel.
   Add `intervu()` as shown above and ask the human to restart the dev server; the Session stays open meanwhile.
 - **A help line saying the plugin refused the request** - usually a proxy in front of the dev server.
-  The dev server's terminal has an `[intervu] refused` line naming the header it rejected.
-  The proxy must pass the browser's `Host` (or `X-Forwarded-Host`), and the hostname must be in `server.allowedHosts` in `vite.config.ts`.
+  Run `intervu doctor <url>`: its guard check names the rejection reason, and the dev server's terminal has the `[intervu] refused` line with the full comparison.
+  The proxy must pass the browser's `Host` (or `X-Forwarded-Host`), and the hostname must be in `server.allowedHosts` in `vite.config.ts`; the README's "Behind a reverse proxy" section has working nginx and Caddy blocks.
 - **A help line saying the plugin does not see the Session** - the dev server reaches a different intervu daemon, or none.
   Ask the human to start the dev server with the same `INTERVU_PORT` as your shell.
 

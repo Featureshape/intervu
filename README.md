@@ -67,6 +67,84 @@ feedback or answer a question while a poll stays open:
 intervu reply report.html "looking at the billing code now"
 ```
 
+Review a running Vite app instead of a file (URL mode): add the `intervu/vite` plugin to the app's dev server, then open a Session on the URL the browser uses.
+The same `poll`, `reply` and `end` commands take the origin as the handle:
+
+```bash
+intervu http://localhost:5173
+intervu poll http://localhost:5173
+```
+
+When something in the loop looks wrong, two commands answer before any guessing does:
+
+```bash
+intervu status                      # what the daemon and the plugin report
+intervu doctor http://localhost:5173  # replay the overlay's exact lookup, per-check verdict
+```
+
+## Behind a reverse proxy
+
+A TLS-terminating proxy (nginx, Caddy) in front of the dev server is the setup where the review loop most often goes silent: the browser is on `https://app.example.com` while Vite sees plain http, and the plugin's relay refuses requests it cannot prove came from the dev server's own page.
+Four things must hold:
+
+- the proxy forwards the browser's `Host` **with its port** (or sets `X-Forwarded-Host`), so the relay can match the page's origin;
+- the proxy sets `X-Forwarded-Proto`, so the dev server knows the browser is on https;
+- response buffering is off, so the panel's live SSE stream is not held back;
+- the request body limit allows a page snapshot (a few MB on a heavy page).
+
+And in `vite.config.ts`, the public hostname must be in `server.allowedHosts`:
+
+```ts
+export default defineConfig({
+  plugins: [react(), intervu()],
+  server: { allowedHosts: ["app.example.com"] },
+});
+```
+
+nginx:
+
+```nginx
+map $http_upgrade $connection_upgrade {
+  default upgrade;
+  "" close;
+}
+
+server {
+  listen 443 ssl;
+  server_name app.example.com;
+
+  location / {
+    proxy_pass http://127.0.0.1:5173;
+    proxy_http_version 1.1;
+    proxy_set_header Host $http_host;              # the browser's Host, port included
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Upgrade $http_upgrade;        # Vite's HMR websocket
+    proxy_set_header Connection $connection_upgrade;
+    proxy_buffering off;                           # the panel's SSE stream
+    client_max_body_size 32m;                      # Feedback page snapshots
+  }
+}
+```
+
+Caddy (which forwards `Host` and sets `X-Forwarded-Proto` on its own):
+
+```caddy
+app.example.com {
+  reverse_proxy 127.0.0.1:5173 {
+    flush_interval -1   # the panel's SSE stream
+  }
+  request_body {
+    max_size 32MB
+  }
+}
+```
+
+Then prove the path end to end - the doctor replays the overlay's exact lookup, so a pass means the badge in the browser will find its Session:
+
+```bash
+intervu doctor https://app.example.com
+```
+
 ## Feedback loop
 
 ```bash

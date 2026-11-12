@@ -247,6 +247,48 @@ test("when its proxy stops forwarding the browser's Host, the badge names the re
   );
 });
 
+test("doctor through the good proxy passes end to end", async () => {
+  // The Session from the first test is still open; the proxy forwards the
+  // right headers, so the overlay's exact lookup settles every check.
+  const run = await runCli(["doctor", appUrl], browserRecorder());
+  expect(run.exitCode).toBe(0);
+  const checks = fieldOf(run.output, "checks");
+  const results = (Array.isArray(checks) ? checks : []).map((row) => [
+    fieldOf(row, "check"),
+    fieldOf(row, "result"),
+  ]);
+  expect(results).toEqual([
+    ["app-reachable", "pass"],
+    ["plugin-answering", "pass"],
+    ["guard", "pass"],
+    ["daemon-from-plugin", "pass"],
+    ["open-session", "pass"],
+  ]);
+});
+
+test("doctor through the misconfigured proxy fails the guard with the logged reason", async () => {
+  const run = await runCli(["doctor", swappedAppUrl], browserRecorder());
+  expect(run.exitCode).not.toBe(0);
+  const checks = fieldOf(run.output, "checks");
+  const guard = (Array.isArray(checks) ? checks : []).find(
+    (row) => fieldOf(row, "check") === "guard",
+  );
+  expect(fieldOf(guard ?? null, "result")).toBe("fail");
+  // Doctor sends the Origin header the spec pins, so this proxy earns it a
+  // foreign-origin refusal - and the dev server logs doctor's own request
+  // with exactly that reason, alongside the tab's foreign-page-origin lines.
+  expect(String(fieldOf(guard ?? null, "detail"))).toContain("foreign-origin");
+  expect(String(fieldOf(guard ?? null, "detail"))).toContain(swappedAppUrl);
+  expect(String(fieldOf(guard ?? null, "hint"))).toContain(
+    "Behind a reverse proxy",
+  );
+  await expect
+    .poll(() => devServerLog)
+    .toContain(
+      "refused GET /__intervu/session: its Origin is not an address this dev server answers to",
+    );
+});
+
 test("a probe the proxy blocks no longer produces a false plugin warning", async () => {
   // The CLI's own probe through the still-misconfigured proxy is refused, but
   // the plugin has been reporting to the daemon the whole time - and it has

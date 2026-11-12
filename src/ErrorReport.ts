@@ -6,6 +6,7 @@ import {
   BrowserAssetBuildError,
   ConflictingSetupScope,
   DaemonNotRunning,
+  DoctorChecksFailed,
   HomeDirectoryUnresolved,
   IntervuNotOnPath,
   ReviewNotOpen,
@@ -65,6 +66,14 @@ export const report = (
         help: `start the app's dev server, then re-run 'intervu ${error.url}'`,
       }),
     );
+  }
+
+  // Already rendered, like a framework error: the doctor's per-check view -
+  // fix hints included - is the whole stdout document, and a second envelope
+  // would make it undecodable as one TOON doc. The failure only carries the
+  // non-zero exit.
+  if (error instanceof DoctorChecksFailed) {
+    return Option.none();
   }
 
   if (error instanceof ReviewNotOpen) {

@@ -145,3 +145,16 @@ export class AppUnreachable extends Schema.TaggedErrorClass<AppUnreachable>()(
     url: Schema.String,
   },
 ) {}
+
+/**
+ * `intervu doctor <url>` found failing checks. The per-check verdicts with
+ * their fix hints are already on stdout; this failure makes the run exit
+ * non-zero, so a script can gate on it.
+ */
+export class DoctorChecksFailed extends Schema.TaggedErrorClass<DoctorChecksFailed>()(
+  "DoctorChecksFailed",
+  {
+    origin: Schema.String,
+    failed: Schema.Number,
+  },
+) {}
