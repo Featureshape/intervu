@@ -19,7 +19,12 @@ test("GET /apps/session finds the app Session open for an origin", async ({
   });
   expect(response.status()).toBe(200);
   expect(await response.json()).toEqual({
-    session: { key: expect.stringMatching(/^[0-9a-f]{16}$/), status: "open" },
+    session: {
+      key: expect.stringMatching(/^[0-9a-f]{16}$/),
+      status: "open",
+      // The activity stamp the relay breaks two-daemon ties with.
+      lastActivityAt: expect.any(Number),
+    },
   });
 });
 

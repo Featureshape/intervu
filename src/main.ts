@@ -3,11 +3,13 @@ import {
   Cause,
   Clock,
   Console,
+  Duration,
   Effect,
   FileSystem,
   Layer,
   Option,
   Result,
+  Schedule,
 } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -18,16 +20,19 @@ import { ArtifactWatcher } from "./ArtifactWatcher.ts";
 import * as Browser from "./Browser.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
 import { CommandResolver } from "./CommandResolver.ts";
+import { DaemonBoundPort, DaemonIdentity } from "./DaemonIdentity.ts";
 import * as Doctor from "./Doctor.ts";
 import * as ErrorReport from "./ErrorReport.ts";
 import {
   ArtifactNotFound,
   ConflictingSetupScope,
   DoctorChecksFailed,
+  StaleServerTakeover,
 } from "./Errors.ts";
 import * as IdleShutdown from "./IdleShutdown.ts";
 import * as Output from "./Output.ts";
 import { PluginRegistry } from "./PluginRegistry.ts";
+import { firstFreePort } from "./PortBind.ts";
 import type { StatusResponse } from "./Protocol.ts";
 import * as Server from "./Server.ts";
 import { ServerLifecycle } from "./ServerLifecycle.ts";
@@ -35,6 +40,7 @@ import type { SessionKind } from "./Session.ts";
 import { SessionHub } from "./SessionHub.ts";
 import { SessionPersistence } from "./SessionPersistence.ts";
 import { SessionStore } from "./SessionStore.ts";
+import { countsAsOpen } from "./SessionTtl.ts";
 import { Setup } from "./Setup.ts";
 import { SkillAsset } from "./SkillAsset.ts";
 import { SnapshotFiles } from "./SnapshotFiles.ts";
@@ -61,9 +67,14 @@ const emit = (text: string): Effect.Effect<void> => Console.log(text);
  */
 const root = Command.make(bin, {}, () =>
   Effect.gen(function* () {
+    const config = yield* AppConfig;
     const persistence = yield* SessionPersistence;
-    const live = (yield* persistence.load).filter(
-      (session) => session.status === "open",
+    // Expiry is computed wherever Sessions are read: a Session idle past the
+    // TTL counts as `ended` here even before the daemon's sweep tidies it.
+    const now = yield* Clock.currentTimeMillis;
+    const ttlMs = Duration.toMillis(config.sessionTtl);
+    const live = (yield* persistence.load).filter((session) =>
+      countsAsOpen(session, now, ttlMs),
     );
 
     const view = Output.home({
@@ -455,13 +466,57 @@ const server = Command.make(
       const config = yield* AppConfig;
       const fs = yield* FileSystem.FileSystem;
       const hub = yield* SessionHub;
-      const boundPort = Option.getOrElse(port, () => config.port);
+      const store = yield* SessionStore;
+
+      // The bind target: the explicit flag, the pinned `INTERVU_PORT`, or -
+      // the coexistence rule - the first free port of the fixed range, so a
+      // daemon from another sandbox already on a port is left alone.
+      const boundPort = yield* Option.match(port, {
+        onSome: (flagged) => Effect.succeed(flagged),
+        onNone: () =>
+          config.portPinned
+            ? Effect.succeed(config.port)
+            : firstFreePort(config.hostname, config.ports).pipe(
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () =>
+                      Effect.fail(
+                        new StaleServerTakeover({
+                          port: config.port,
+                          reason: `every port in ${config.ports[0]}-${config.ports[config.ports.length - 1]} is taken`,
+                        }),
+                      ),
+                    onSome: (free) => Effect.succeed(free),
+                  }),
+                ),
+              ),
+      });
 
       yield* fs.makeDirectory(config.stateDir, { recursive: true });
       yield* fs.writeFileString(config.pidFile, `${process.pid}`);
 
+      // The idle-TTL sweep: tidy expired Sessions to `ended` on start, then
+      // hourly. Expiry is computed wherever Sessions are read; this only
+      // keeps the state file from accumulating long-dead `open` entries.
+      const sweep = store
+        .sweepExpired(Duration.toMillis(config.sessionTtl))
+        .pipe(
+          Effect.flatMap((flipped) =>
+            flipped > 0
+              ? Effect.logInfo(`swept ${flipped} idle Session(s) to ended`)
+              : Effect.void,
+          ),
+          Effect.catch((error) =>
+            Effect.logError("the Session sweep failed", error),
+          ),
+        );
+      yield* Effect.forkChild(
+        sweep.pipe(Effect.repeat(Schedule.spaced("1 hour"))),
+      );
+
       const serverLayer = Server.layer.pipe(
         Layer.provide(BrowserAssets.layer),
+        Layer.provide(Layer.succeed(DaemonBoundPort, { port: boundPort })),
         Layer.provide(
           BunHttpServer.layer({
             hostname: config.hostname,
@@ -727,6 +782,7 @@ const AppLayer = Layer.mergeAll(
   SnapshotFiles.layer,
   PluginRegistry.layer,
   WaitingOrigins.layer,
+  DaemonIdentity.layer,
 ).pipe(
   Layer.provideMerge(SessionHub.layer),
   Layer.provideMerge(SessionPersistence.fileLayer),

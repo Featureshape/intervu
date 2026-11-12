@@ -11,6 +11,7 @@ const sessionAt = (key: string, path: string) =>
     path,
     status: "open",
     kind: "artifact",
+    lastActivityAt: 1_700_000_000_000,
   });
 
 describe("SessionPersistence.memoryLayer", () => {

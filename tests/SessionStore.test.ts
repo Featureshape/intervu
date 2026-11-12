@@ -1,6 +1,7 @@
 import * as BunCrypto from "@effect/platform-bun/BunCrypto";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
+import { TestClock } from "effect/testing";
 import { Feedback } from "../src/Protocol.ts";
 import { Session, SessionKey } from "../src/Session.ts";
 import { SessionPersistence } from "../src/SessionPersistence.ts";
@@ -351,9 +352,65 @@ describe("SessionStore", () => {
             path: "/tmp/seed.html",
             status: "open",
             kind: "artifact",
+            lastActivityAt: 1_700_000_000_000,
           }),
         ]),
       ),
     ),
+  );
+});
+
+describe("SessionStore activity and the TTL sweep", () => {
+  it.effect("open stamps lastActivityAt, and touch bumps it", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      yield* TestClock.adjust("1 second");
+      const session = yield* store.open("/tmp/a.html", "artifact");
+      expect(session.lastActivityAt).toBe(1_000);
+
+      yield* TestClock.adjust("5 seconds");
+      yield* store.touch(session.key);
+      const touched = yield* store.get(session.key);
+      expect(Option.getOrUndefined(touched)?.lastActivityAt).toBe(6_000);
+
+      // Unknown keys are a no-op, not an error.
+      yield* store.touch(SessionKey.make("ffffffffffffffff"));
+    }).pipe(Effect.provide(storeLayer())),
+  );
+
+  it.effect("re-opening bumps activity, so a resume never expires early", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      const first = yield* store.open("/tmp/a.html", "artifact");
+      yield* TestClock.adjust("10 seconds");
+      const again = yield* store.open("/tmp/a.html", "artifact");
+      expect(again.key).toBe(first.key);
+      expect(again.lastActivityAt).toBe(10_000);
+    }).pipe(Effect.provide(storeLayer())),
+  );
+
+  it.effect("the sweep flips only open Sessions idle past the TTL", () =>
+    Effect.gen(function* () {
+      const store = yield* SessionStore;
+      const idle = yield* store.open("/tmp/idle.html", "artifact");
+      yield* TestClock.adjust("2 hours");
+      const fresh = yield* store.open("/tmp/fresh.html", "artifact");
+
+      const flipped = yield* store.sweepExpired(60 * 60 * 1000);
+      expect(flipped).toBe(1);
+      const after = yield* store.list;
+      expect(after.map((session) => [session.path, session.status])).toEqual([
+        ["/tmp/idle.html", "ended"],
+        ["/tmp/fresh.html", "open"],
+      ]);
+
+      // Idempotent: a second sweep finds nothing left to flip, and the
+      // swept Session resurrects on re-open as any ended one does.
+      expect(yield* store.sweepExpired(60 * 60 * 1000)).toBe(0);
+      const revived = yield* store.open("/tmp/idle.html", "artifact");
+      expect(revived.status).toBe("open");
+      expect(revived.key).toBe(idle.key);
+      expect(fresh.status).toBe("open");
+    }).pipe(Effect.provide(storeLayer())),
   );
 });

@@ -3,7 +3,11 @@ import { isIP } from "node:net";
 import { appSessionUrl, sessionKeyPattern } from "../DaemonRoutes.ts";
 import type { GuardRejection } from "./guardRefusal.ts";
 import { relayPrefix } from "./relayPaths.ts";
-import { openSessionKeyIn } from "./sessionAnswer.ts";
+import {
+  chooseLookupAnswer,
+  type DaemonLookupAnswer,
+  openSessionKeyIn,
+} from "./sessionAnswer.ts";
 
 /**
  * The relay half of the `intervu/vite` plugin: the dev server mounts it under
@@ -545,51 +549,108 @@ const openSessionKeyOf = (answer: string): string | null => {
   }
 };
 
+/** `raw` decoded for choosing, or `null` for an undecodable answer. */
+const decodedOf = (raw: string): unknown => {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+};
+
+/** Ask every daemon port for `origin`'s Session; only the answered ones. */
+const lookupAll = (
+  ports: readonly number[],
+  origin: string,
+  signal: AbortSignal,
+): Promise<readonly { readonly port: number; readonly raw: string }[]> =>
+  Promise.all(
+    ports.map((port) =>
+      lookupSession(port, origin, signal).then((raw) => ({ port, raw })),
+    ),
+  ).then((results) =>
+    results.flatMap((result) =>
+      result.raw === null ? [] : [{ port: result.port, raw: result.raw }],
+    ),
+  );
+
 /**
- * Answer the overlay's "is a Session open for this origin?" with the daemon's
- * `GET /apps/session` answer for `origin`. The overlay asks every second while
- * it rests as the dormant badge, so a daemon that is not running, or not
- * answering in time, is still a `200` rather than a `502` - a failed request
+ * Answer the overlay's "is a Session open for this origin?" by asking every
+ * local daemon - ten loopback probes with short timeouts are cheap next to
+ * the 1s polling loop that already runs. The daemon holding an open Session
+ * for the origin answers; two holding one is a logged tie broken by the most
+ * recent activity. The overlay asks every second while it rests as the
+ * dormant badge, so no daemon answering is still a `200` - a failed request
  * would print an error in the app's console that the page cannot suppress -
- * but one whose body says the daemon itself did not answer, so the badge can
- * tell "no daemon" from "no Session".
+ * but one whose body says no daemon answered, so the badge can tell "no
+ * daemon" from "no Session".
  */
 export const answerSessionLookup = (
   response: http.ServerResponse,
-  port: number,
+  ports: readonly number[],
   origin: string,
+  warn: (message: string) => void,
 ): void => {
-  lookupSession(port, origin, closeSignalOf(response)).then((answer) => {
-    if (!response.headersSent && !response.destroyed) {
-      response.writeHead(200, {
-        "content-type": "application/json",
-        "cache-control": "no-store",
-      });
-      response.end(answer ?? noDaemonAnswer([port]));
+  lookupAll(ports, origin, closeSignalOf(response)).then((answered) => {
+    if (response.headersSent || response.destroyed) {
+      return;
     }
+    response.writeHead(200, {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+    });
+    if (answered.length === 0) {
+      response.end(noDaemonAnswer(ports));
+      return;
+    }
+    const decoded: DaemonLookupAnswer[] = answered.map((entry) => ({
+      port: entry.port,
+      answer: decodedOf(entry.raw),
+    }));
+    const choice = chooseLookupAnswer(decoded);
+    if (choice.kind === "open" && choice.openPorts.length > 1) {
+      warn(
+        `[intervu] two daemons hold an open Session for ${origin} (ports ${choice.openPorts.join(", ")}); using ${choice.port}, the most recently active`,
+      );
+    }
+    response.end(
+      answered.find((entry) => entry.port === choice.port)?.raw ??
+        answered[0]?.raw ??
+        noDaemonAnswer(ports),
+    );
   });
 };
 
 /**
- * Forward a Session-scoped request for `key` to the daemon as `path`, but only
- * when `key` is the Session open for `origin`, the page's own; any other key,
- * or no open Session, is a `404 RouteNotRelayed`, the same as a route the relay
- * does not know, and a line through `warn` for the dev server's log.
+ * Forward a Session-scoped request for `key` to the daemon holding it as
+ * `path`, but only when `key` is the Session open for `origin`, the page's
+ * own; any other key, or no open Session on any daemon, is a
+ * `404 RouteNotRelayed`, the same as a route the relay does not know, and a
+ * line through `warn` for the dev server's log.
  */
 export const relayToOwnSession = (
   request: http.IncomingMessage,
   response: http.ServerResponse,
-  port: number,
+  ports: readonly number[],
   origin: string,
   key: string,
   path: string,
   warn: (message: string) => void,
 ): void => {
-  lookupSession(port, origin, closeSignalOf(response)).then((answer) => {
+  lookupAll(ports, origin, closeSignalOf(response)).then((answered) => {
     if (response.headersSent || response.destroyed) {
       return;
     }
-    if (answer === null || openSessionKeyOf(answer) !== key) {
+    const holding = answered.filter(
+      (entry) => openSessionKeyOf(entry.raw) === key,
+    );
+    const choice = chooseLookupAnswer(
+      holding.map((entry) => ({
+        port: entry.port,
+        answer: decodedOf(entry.raw),
+      })),
+    );
+    if (choice.kind !== "open") {
       warn(
         `[intervu] refused ${request.method ?? "GET"} ${relayPrefix}${path}: Session ${key} is not the Session open for the page origin ${origin}`,
       );
@@ -601,6 +662,6 @@ export const relayToOwnSession = (
       );
       return;
     }
-    relayToDaemon(request, response, port, path);
+    relayToDaemon(request, response, choice.port, path);
   });
 };
