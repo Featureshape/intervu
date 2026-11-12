@@ -18,8 +18,13 @@ import { ArtifactWatcher } from "./ArtifactWatcher.ts";
 import * as Browser from "./Browser.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
 import { CommandResolver } from "./CommandResolver.ts";
+import * as Doctor from "./Doctor.ts";
 import * as ErrorReport from "./ErrorReport.ts";
-import { ArtifactNotFound, ConflictingSetupScope } from "./Errors.ts";
+import {
+  ArtifactNotFound,
+  ConflictingSetupScope,
+  DoctorChecksFailed,
+} from "./Errors.ts";
 import * as IdleShutdown from "./IdleShutdown.ts";
 import * as Output from "./Output.ts";
 import { PluginRegistry } from "./PluginRegistry.ts";
@@ -486,6 +491,57 @@ const server = Command.make(
 );
 
 /**
+ * `intervu doctor <url>`: replay the overlay's exact Session lookup and print
+ * a per-check verdict - app reachable, plugin answering, guard verdict (with
+ * the rejection reason on a refusal), daemon reachable from the plugin, and
+ * whether an open Session matches the origin. A plain `curl` without
+ * `?origin=` once gave a false pass; doctor cannot, because it always sends
+ * what the overlay sends. Any failing check makes the run exit non-zero,
+ * after the verdicts - and their fix hints - are on stdout.
+ */
+const doctor = Command.make(
+  "doctor",
+  {
+    target: Argument.string("url").pipe(
+      Argument.filterMap(
+        AppUrl.parseAppUrl,
+        (raw) => `${raw} is not an http(s) URL`,
+      ),
+      Argument.withDescription(
+        "the reviewed app's URL, exactly as the browser reaches it",
+      ),
+    ),
+  },
+  ({ target }) =>
+    Effect.gen(function* () {
+      const diagnosis = yield* Doctor.diagnose(target);
+      const failed = Doctor.failedCount(diagnosis);
+
+      const view = Output.doctor({
+        url: target.url,
+        origin: target.origin,
+        checks: [
+          { check: "app-reachable", ...diagnosis.app },
+          { check: "plugin-answering", ...diagnosis.plugin },
+          { check: "guard", ...diagnosis.guard },
+          { check: "daemon-from-plugin", ...diagnosis.daemon },
+          { check: "open-session", ...diagnosis.session },
+        ],
+        help:
+          failed === 0
+            ? `every check passes - the overlay at ${target.origin} finds its Session`
+            : `${failed} of 5 checks failed - each failing check carries a fix hint`,
+      });
+      yield* emit(yield* Toon.encode(view));
+      if (failed > 0) {
+        return yield* Effect.fail(
+          new DoctorChecksFailed({ origin: target.origin, failed }),
+        );
+      }
+    }),
+);
+
+/**
  * `intervu status`: the live diagnostics read. Unlike the offline Home view
  * (ADR 0013), this one talks to the daemon: it prints the daemon's version,
  * port and state dir, every Session with its Presence, every plugin that has
@@ -627,6 +683,7 @@ const cli = root.pipe(
     server,
     stop,
     status,
+    doctor,
     setup,
   ]),
 );
@@ -645,6 +702,7 @@ const knownSubcommands = new Set([
   "server",
   "stop",
   "status",
+  "doctor",
   "setup",
 ]);
 const rawArgs = process.argv.slice(2);

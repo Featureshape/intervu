@@ -436,6 +436,48 @@ export const status = (params: {
   help: params.help,
 });
 
+/** One doctor check as `intervu doctor` prints it, hint only on failure. */
+export interface DoctorCheckView {
+  readonly check: string;
+  readonly result: string;
+  readonly detail: string;
+  readonly hint?: string;
+}
+
+/**
+ * The `intervu doctor <url>` view, in canonical key order: the URL and
+ * origin it diagnosed, the five checks in the order they run, then `help`.
+ */
+export interface DoctorView {
+  readonly url: string;
+  readonly origin: string;
+  readonly checks: readonly DoctorCheckView[];
+  readonly help: string;
+}
+
+/** Shape the doctor's verdicts, pinning check order and key order. */
+export const doctor = (params: {
+  readonly url: string;
+  readonly origin: string;
+  readonly checks: readonly {
+    readonly check: string;
+    readonly result: string;
+    readonly detail: string;
+    readonly hint?: string | undefined;
+  }[];
+  readonly help: string;
+}): DoctorView => ({
+  url: params.url,
+  origin: params.origin,
+  checks: params.checks.map((check) => ({
+    check: check.check,
+    result: check.result,
+    detail: check.detail,
+    ...(check.hint === undefined ? {} : { hint: check.hint }),
+  })),
+  help: params.help,
+});
+
 /** The `status` view when no daemon answered on the port. */
 export interface StatusNoDaemonView {
   readonly daemon: "none";
