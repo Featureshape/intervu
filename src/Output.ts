@@ -73,21 +73,34 @@ export const session = (params: SessionView): SessionView => ({
 
 /**
  * A URL-mode Session as printed by `open <url>` (ADR 0022), in canonical key
- * order: `key`, `origin`, `status`, `help`. `origin` is the handle every later
- * command takes for this Session.
+ * order: `key`, `origin`, `status`, then - only when there is something to
+ * say - `warning` (an origin no browser will report) and `didYouMean` (a
+ * browser is waiting at another origin), then `help`. `origin` is the handle
+ * every later command takes for this Session.
  */
 export interface AppSessionView {
   readonly key: string;
   readonly origin: string;
   readonly status: string;
+  readonly warning?: string;
+  readonly didYouMean?: string;
   readonly help: string;
 }
 
 /** Shape the URL-mode Session view, pinning key order. */
-export const appSession = (params: AppSessionView): AppSessionView => ({
+export const appSession = (params: {
+  readonly key: string;
+  readonly origin: string;
+  readonly status: string;
+  readonly warning?: string | undefined;
+  readonly didYouMean?: string | undefined;
+  readonly help: string;
+}): AppSessionView => ({
   key: params.key,
   origin: params.origin,
   status: params.status,
+  ...(params.warning === undefined ? {} : { warning: params.warning }),
+  ...(params.didYouMean === undefined ? {} : { didYouMean: params.didYouMean }),
   help: params.help,
 });
 
@@ -333,10 +346,17 @@ export interface StatusRefusalView {
   readonly lastAt: string;
 }
 
+/** One waiting origin as `intervu status` prints it. */
+export interface StatusWaitingView {
+  readonly origin: string;
+  readonly count: number;
+  readonly lastSeenAt: string;
+}
+
 /**
  * The `intervu status` view, in canonical key order: the daemon describing
  * itself, its Sessions with Presence, the reporting plugins, their refusal
- * tallies, then `help`.
+ * tallies, the waiting origins, then `help`.
  */
 export interface StatusView {
   readonly version: string;
@@ -345,6 +365,7 @@ export interface StatusView {
   readonly sessions: readonly StatusSessionView[];
   readonly plugins: readonly StatusPluginView[];
   readonly refusals: readonly StatusRefusalView[];
+  readonly waitingOrigins: readonly StatusWaitingView[];
   readonly help: string;
 }
 
@@ -371,6 +392,11 @@ export const status = (params: {
       readonly count: number;
       readonly lastAt: number;
     }[];
+    readonly lastSeenAt: number;
+  }[];
+  readonly waitingOrigins: readonly {
+    readonly origin: string;
+    readonly count: number;
     readonly lastSeenAt: number;
   }[];
   readonly help: string;
@@ -402,6 +428,11 @@ export const status = (params: {
       lastAt: isoOf(refusal.lastAt),
     })),
   ),
+  waitingOrigins: params.waitingOrigins.map((waiting) => ({
+    origin: waiting.origin,
+    count: waiting.count,
+    lastSeenAt: isoOf(waiting.lastSeenAt),
+  })),
   help: params.help,
 });
 

@@ -222,10 +222,23 @@ export class StatusPlugin extends Schema.Class<StatusPlugin>("StatusPlugin")({
 }) {}
 
 /**
+ * One origin a browser keeps asking for with no Session to find: how often
+ * its `GET /apps/session` lookup answered `session: null` and when it last
+ * did (epoch milliseconds, the daemon's clock).
+ */
+export class WaitingOrigin extends Schema.Class<WaitingOrigin>("WaitingOrigin")(
+  {
+    origin: Schema.String,
+    count: Schema.Number,
+    lastSeenAt: Schema.Number,
+  },
+) {}
+
+/**
  * `GET /status` response body: the daemon describing itself - version, port
- * and state dir - plus its Sessions with Presence and every plugin that has
- * reported in. `intervu status` renders this; the Home view stays offline
- * (ADR 0013).
+ * and state dir - plus its Sessions with Presence, every plugin that has
+ * reported in, and the origins whose browsers are looking for a Session.
+ * `intervu status` renders this; the Home view stays offline (ADR 0013).
  */
 export class StatusResponse extends Schema.Class<StatusResponse>(
   "StatusResponse",
@@ -235,6 +248,9 @@ export class StatusResponse extends Schema.Class<StatusResponse>(
   stateDir: Schema.String,
   sessions: Schema.Array(StatusSession),
   plugins: Schema.Array(StatusPlugin),
+  // Optional on the wire: a still-running daemon from the build before this
+  // field must not fail a newer CLI's `intervu status` decode mid-upgrade.
+  waitingOrigins: Schema.optional(Schema.Array(WaitingOrigin)),
 }) {}
 
 /**

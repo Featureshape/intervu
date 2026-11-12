@@ -24,3 +24,29 @@ export const parseAppUrl = (raw: string): Option.Option<AppUrl> =>
     ),
     Option.map((parsed) => ({ url: parsed.href, origin: parsed.origin })),
   );
+
+/**
+ * The warning for an origin no browser will ever report: `http:` with an
+ * explicit port 443 (TLS spoken to in plain http) or `https:` with an
+ * explicit port 80. A browser on the same address reports the other scheme
+ * with no port, so a Session keyed by `app.origin` is one no page can find.
+ * The Session still opens; the warning names the origin a browser would
+ * actually report. `None` for every other URL.
+ */
+export const schemePortWarning = (app: AppUrl): Option.Option<string> => {
+  const parsed = URL.parse(app.origin);
+  if (parsed === null) {
+    return Option.none();
+  }
+  const suggested =
+    parsed.protocol === "http:" && parsed.port === "443"
+      ? `https://${parsed.hostname}`
+      : parsed.protocol === "https:" && parsed.port === "80"
+        ? `http://${parsed.hostname}`
+        : null;
+  return suggested === null
+    ? Option.none()
+    : Option.some(
+        `${app.origin} is an origin no browser will report - a browser on that address reports ${suggested}, so the overlay will not find this Session; if that is the page's address, run 'intervu ${suggested}'`,
+      );
+};
