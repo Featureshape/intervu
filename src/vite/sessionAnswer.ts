@@ -17,6 +17,87 @@ export const openSessionKeyIn = (answer: unknown): string | null =>
     ? answer.session.key
     : null;
 
+/** One daemon's decoded lookup answer, tagged with the port it came from. */
+export interface DaemonLookupAnswer {
+  readonly port: number;
+  readonly answer: unknown;
+}
+
+/** The open Session in `answer` with its activity stamp, or `null`. */
+const openSessionIn = (
+  answer: unknown,
+): { readonly key: string; readonly lastActivityAt: number } | null => {
+  const key = openSessionKeyIn(answer);
+  if (key === null) {
+    return null;
+  }
+  const lastActivityAt =
+    hasField(answer, "session") &&
+    hasField(answer.session, "lastActivityAt") &&
+    typeof answer.session.lastActivityAt === "number"
+      ? answer.session.lastActivityAt
+      : 0;
+  return { key, lastActivityAt };
+};
+
+/** Which answer the relay forwards when several daemons answered. */
+export type LookupChoice =
+  | {
+      readonly kind: "open";
+      readonly port: number;
+      readonly key: string;
+      /** Every port holding an open Session; more than one earns a warning. */
+      readonly openPorts: readonly number[];
+      readonly answer: unknown;
+    }
+  | {
+      readonly kind: "none";
+      /** The port whose answer is forwarded; `null` with no answers at all. */
+      readonly port: number | null;
+      readonly answer: unknown;
+    };
+
+/**
+ * Choose among the daemons that answered a Session lookup: the one holding
+ * an open Session for the origin wins, and when two do, the most recently
+ * active one (ports in `openPorts` let the relay warn about the tie). With
+ * no open Session anywhere, an answer that at least names a Session (an
+ * ended one) beats a bare `session: null`.
+ */
+export const chooseLookupAnswer = (
+  answers: readonly DaemonLookupAnswer[],
+): LookupChoice => {
+  const open = answers.flatMap((entry) => {
+    const found = openSessionIn(entry.answer);
+    return found === null ? [] : [{ ...entry, found }];
+  });
+  if (open.length > 0) {
+    const freshest = [...open].sort(
+      (a, b) => b.found.lastActivityAt - a.found.lastActivityAt,
+    );
+    const chosen = freshest[0] ?? open[0];
+    if (chosen !== undefined) {
+      return {
+        kind: "open",
+        port: chosen.port,
+        key: chosen.found.key,
+        openPorts: open.map((entry) => entry.port),
+        answer: chosen.answer,
+      };
+    }
+  }
+  const withSession = answers.find(
+    (entry) =>
+      hasField(entry.answer, "session") && entry.answer.session !== null,
+  );
+  const fallback = withSession ?? answers[0];
+  return {
+    kind: "none",
+    port: fallback?.port ?? null,
+    answer: fallback?.answer ?? null,
+  };
+};
+
 /**
  * The daemon port(s) a decoded relay lookup answer says nothing answered on,
  * or `null` when it says no such thing - a daemon's own answer, or a relay

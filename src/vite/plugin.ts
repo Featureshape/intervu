@@ -1,5 +1,5 @@
 import type { Plugin } from "vite";
-import { daemonPortFrom } from "../DaemonPort.ts";
+import { daemonPortsFrom } from "../DaemonPort.ts";
 import { jsxSourcePlugin } from "./jsxSource.ts";
 import { loadOverlayJs } from "./overlayAsset.ts";
 import {
@@ -69,8 +69,9 @@ const overlayPlugin = (redact: boolean): Plugin => ({
   name: "intervu",
   apply: "serve",
   configureServer(server) {
-    // Found the way the CLI finds it, so both reach the same daemon.
-    const port = daemonPortFrom(process.env.INTERVU_PORT);
+    // Found the way the CLI finds them, so both reach the same daemons: the
+    // pinned port when INTERVU_PORT is set, else the whole fixed range.
+    const ports = daemonPortsFrom(process.env.INTERVU_PORT);
     const https = server.config.server.https !== undefined;
     const allowedHosts = server.config.server.allowedHosts;
     // Built once per dev server start; every page load awaits the same build.
@@ -87,7 +88,7 @@ const overlayPlugin = (redact: boolean): Plugin => ({
     let devServerOrigin: string | null = null;
     const report = (): void => {
       if (devServerOrigin !== null) {
-        sendPluginReport([port], reportBodyOf(reporter, devServerOrigin));
+        sendPluginReport(ports, reportBodyOf(reporter, devServerOrigin));
       }
     };
     let pendingReport: NodeJS.Timeout | null = null;
@@ -171,7 +172,7 @@ const overlayPlugin = (redact: boolean): Plugin => ({
       }
 
       if (method === "GET" && path === sessionPath) {
-        answerSessionLookup(response, port, verdict.pageOrigin);
+        answerSessionLookup(response, ports, verdict.pageOrigin, warnOnce);
         return;
       }
 
@@ -180,7 +181,7 @@ const overlayPlugin = (redact: boolean): Plugin => ({
         relayToOwnSession(
           request,
           response,
-          port,
+          ports,
           verdict.pageOrigin,
           key,
           path,
@@ -198,7 +199,7 @@ const overlayPlugin = (redact: boolean): Plugin => ({
         );
         return;
       }
-      relayToDaemon(request, response, port, path);
+      relayToDaemon(request, response, ports[0] ?? 51789, path);
     });
   },
   transformIndexHtml() {

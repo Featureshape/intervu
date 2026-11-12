@@ -327,6 +327,7 @@ export interface StatusSessionView {
   readonly handle: string;
   readonly status: string;
   readonly presence: string;
+  readonly lastActivityAt?: string;
 }
 
 /** One reporting plugin as `intervu status` prints it. */
@@ -385,7 +386,14 @@ export const status = (params: {
   readonly version: string;
   readonly port: number;
   readonly stateDir: string;
-  readonly sessions: readonly StatusSessionView[];
+  readonly sessions: readonly {
+    readonly key: string;
+    readonly kind: string;
+    readonly handle: string;
+    readonly status: string;
+    readonly presence: string;
+    readonly lastActivityAt?: number | undefined;
+  }[];
   readonly plugins: readonly {
     readonly origin: string;
     readonly seenOrigins: readonly string[];
@@ -414,6 +422,9 @@ export const status = (params: {
     handle: session.handle,
     status: session.status,
     presence: session.presence,
+    ...(session.lastActivityAt === undefined
+      ? {}
+      : { lastActivityAt: isoOf(session.lastActivityAt) }),
   })),
   plugins: params.plugins.map((plugin) => ({
     origin: plugin.origin,

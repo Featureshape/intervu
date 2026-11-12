@@ -17,6 +17,7 @@ import { AppConfig } from "./AppConfig.ts";
 import * as ArtifactAssets from "./ArtifactAssets.ts";
 import { ArtifactWatcher } from "./ArtifactWatcher.ts";
 import { BrowserAssets } from "./BrowserAssets.ts";
+import { DaemonBoundPort, DaemonIdentity } from "./DaemonIdentity.ts";
 import { appSessionPath, pluginReportPath } from "./DaemonRoutes.ts";
 import * as FeedbackWait from "./FeedbackWait.ts";
 import { PluginRegistry } from "./PluginRegistry.ts";
@@ -102,7 +103,13 @@ const healthRoute = HttpRouter.add(
   "/health",
   Effect.gen(function* () {
     const config = yield* AppConfig;
-    return HttpServerResponse.jsonUnsafe({ ok: true, version: config.version });
+    const identity = yield* DaemonIdentity;
+    return HttpServerResponse.jsonUnsafe({
+      ok: true,
+      version: config.version,
+      stateDir: config.stateDir,
+      instanceId: identity.instanceId,
+    });
   }),
 );
 
@@ -158,7 +165,11 @@ const appSessionRoute = HttpRouter.add(
       AppSessionResponse.make({
         session: Option.match(app, {
           onNone: () => null,
-          onSome: (found) => ({ key: found.key, status: found.status }),
+          onSome: (found) => ({
+            key: found.key,
+            status: found.status,
+            lastActivityAt: found.lastActivityAt,
+          }),
         }),
       }),
     );
@@ -209,6 +220,7 @@ const statusRoute = HttpRouter.add(
   "/status",
   Effect.gen(function* () {
     const config = yield* AppConfig;
+    const bound = yield* DaemonBoundPort;
     const store = yield* SessionStore;
     const hub = yield* SessionHub;
     const registry = yield* PluginRegistry;
@@ -223,6 +235,7 @@ const statusRoute = HttpRouter.add(
             handle: session.path,
             status: session.status,
             presence,
+            lastActivityAt: session.lastActivityAt,
           }),
         ),
       ),
@@ -232,7 +245,7 @@ const statusRoute = HttpRouter.add(
     return yield* HttpServerResponse.schemaJson(StatusResponse)(
       StatusResponse.make({
         version: config.version,
-        port: config.port,
+        port: bound.port,
         stateDir: config.stateDir,
         sessions: withPresence,
         plugins,
@@ -373,6 +386,7 @@ const feedbackRoute = HttpRouter.add(
       const store = yield* SessionStore;
       const hub = yield* SessionHub;
       const feedback = yield* HttpServerRequest.schemaBodyJson(ValidFeedback);
+      yield* store.touch(session.key);
       yield* store.queueFeedback(session.key, feedback);
       yield* hub.publish(session.key, new FeedbackQueued());
       const entry = yield* store.appendConversation(session.key, {
@@ -448,6 +462,7 @@ const pollRoute = HttpRouter.add(
       onSome: (open) =>
         Effect.scoped(
           Effect.gen(function* () {
+            yield* store.touch(open.key);
             yield* postAgentReply(open.key, request.agentReply ?? "");
             const outcome = yield* FeedbackWait.wait(open.key, {
               timeout: Option.map(
@@ -498,6 +513,9 @@ const replyRoute = HttpRouter.add(
       onSome: (open) =>
         Effect.gen(function* () {
           const ended = open.status === "ended";
+          if (!ended) {
+            yield* store.touch(open.key);
+          }
           const posted = ended
             ? false
             : yield* postAgentReply(open.key, request.message);

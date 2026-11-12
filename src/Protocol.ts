@@ -8,12 +8,17 @@ import { SessionKind, SessionStatus } from "./Session.ts";
  */
 
 /**
- * `GET /health` response. `version` is present now so the later
- * stale-server-takeover slice (#27) has its handshake field.
+ * `GET /health` response. `version` backs the stale-server takeover (ADR
+ * 0015). `stateDir` and `instanceId` name whose daemon this is: "mine" means
+ * "same state dir", so clients and plugins can tell a sandbox-mate's daemon
+ * from their own on the shared port range. Optional on the wire - a daemon
+ * from before the fields answers without them.
  */
 export class Health extends Schema.Class<Health>("Health")({
   ok: Schema.Boolean,
   version: Schema.String,
+  stateDir: Schema.optional(Schema.String),
+  instanceId: Schema.optional(Schema.String),
 }) {}
 
 /**
@@ -48,7 +53,16 @@ export class AppSessionResponse extends Schema.Class<AppSessionResponse>(
   "AppSessionResponse",
 )({
   session: Schema.NullOr(
-    Schema.Struct({ key: Schema.String, status: SessionStatus }),
+    Schema.Struct({
+      key: Schema.String,
+      status: SessionStatus,
+      /**
+       * When the Session was last active (epoch ms). The relay uses it to
+       * pick the fresher daemon when two hold an open Session for one
+       * origin; optional, absent from older daemons.
+       */
+      lastActivityAt: Schema.optional(Schema.Number),
+    }),
   ),
 }) {}
 
@@ -212,6 +226,8 @@ export class StatusSession extends Schema.Class<StatusSession>("StatusSession")(
     handle: Schema.String,
     status: SessionStatus,
     presence: Presence,
+    /** Last activity (epoch ms); optional, absent from older daemons. */
+    lastActivityAt: Schema.optional(Schema.Number),
   },
 ) {}
 
