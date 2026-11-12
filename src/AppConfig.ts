@@ -1,4 +1,15 @@
-import { Config, Duration, Effect, Layer, Option, Path, Schema } from "effect";
+import * as os from "node:os";
+import {
+  Config,
+  Console,
+  Duration,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Schema,
+} from "effect";
 import * as Context from "effect/Context";
 import { version as packageVersion } from "../package.json" with {
   type: "json",
@@ -95,7 +106,7 @@ export class AppConfig extends Context.Service<
         Config.string("INTERVU_BROWSER"),
       )).pipe(Option.filter((value) => value.length > 0));
 
-      const stateDir = Option.match(override, {
+      const resolvedStateDir = Option.match(override, {
         onSome: (dir) => dir,
         onNone: () =>
           Option.match(xdg, {
@@ -103,6 +114,34 @@ export class AppConfig extends Context.Service<
             onNone: () => path.join(home, ".local", "state", "intervu"),
           }),
       });
+
+      // Inside a sandbox `~/.local/state` is often not writable. Rather than
+      // fail every command, fall back to a per-user dir under `$TMPDIR` and
+      // say so; the fallback is deterministic, so the CLI and the daemon it
+      // spawns with the same environment agree on it, and `intervu status`
+      // names the state dir in use.
+      const fs = yield* FileSystem.FileSystem;
+      const writable = yield* fs
+        .makeDirectory(resolvedStateDir, { recursive: true })
+        .pipe(
+          Effect.andThen(fs.access(resolvedStateDir, { writable: true })),
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        );
+      const user = (yield* Config.option(Config.string("USER"))).pipe(
+        Option.filter((value) => value.length > 0),
+        Option.getOrElse(() => "user"),
+      );
+      const stateDir = writable
+        ? resolvedStateDir
+        : path.join(os.tmpdir(), `intervu-${user}`);
+      if (!writable) {
+        // Straight to stderr: stdout is the TOON document and has exactly
+        // one writer (ADR 0014).
+        yield* Console.error(
+          `[intervu] the state dir ${resolvedStateDir} is not writable - using ${stateDir} instead`,
+        );
+      }
 
       return {
         version,

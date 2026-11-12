@@ -1,5 +1,6 @@
 import { openSync } from "node:fs";
 import {
+  Clock,
   Effect,
   FileSystem,
   Layer,
@@ -96,6 +97,7 @@ export const isStaleVersion = (
 
 type PollError =
   | ReviewNotOpen
+  | DaemonNotRunning
   | HttpClientError.HttpClientError
   | Schema.SchemaError;
 
@@ -431,12 +433,11 @@ export class ServerLifecycle extends Context.Service<
           return yield* HttpClientResponse.schemaBodyJson(Session)(response);
         });
 
-      // Long-poll: hold a single request open until the daemon returns the
-      // drained Feedback (or the `timedOut` marker). A `404` means nothing is
-      // open at this path - a structured `ReviewNotOpen`, not feedback. The
-      // request carries no response timeout, so an indefinite block is not
-      // severed client-side.
-      const poll = (
+      // One poll request, held open until the daemon settles it. A `404`
+      // means nothing is open at this path - a structured `ReviewNotOpen`,
+      // not feedback. No client-side response timeout, so an indefinite
+      // block is not severed by this side.
+      const pollOnce = (
         path: string,
         timeoutSeconds: Option.Option<number>,
         agentReply: Option.Option<string>,
@@ -460,6 +461,65 @@ export class ServerLifecycle extends Context.Service<
           return yield* HttpClientResponse.schemaBodyJson(PollResponse)(
             response,
           );
+        });
+
+      /** A connection that died without a decoded response - not an answer. */
+      const isTransportDrop = (
+        error: PollError,
+      ): error is HttpClientError.HttpClientError =>
+        HttpClientError.isHttpClientError(error) &&
+        error.reason._tag === "TransportError";
+
+      // Long-poll with client-side reconnect: the poll response is a single
+      // TOON document, so the wire cannot carry keepalives - a proxy that
+      // cuts idle connections kills the request instead. A transport drop
+      // without a decoded response re-issues the same poll silently,
+      // preserving any remaining `--timeout` budget; only a daemon that
+      // stops answering `/health` turns the drop into a structured
+      // `DaemonNotRunning`. The agent-reply rides only the first request,
+      // since the daemon posted it before the wait began.
+      const poll = (
+        path: string,
+        timeoutSeconds: Option.Option<number>,
+        agentReply: Option.Option<string>,
+      ) =>
+        Effect.gen(function* () {
+          const startedAt = yield* Clock.currentTimeMillis;
+          let reply = agentReply;
+          while (true) {
+            const now = yield* Clock.currentTimeMillis;
+            const remaining = Option.map(timeoutSeconds, (total) =>
+              Math.ceil(total - (now - startedAt) / 1000),
+            );
+            if (Option.isSome(remaining) && remaining.value <= 0) {
+              return new PollResponse({
+                timedOut: true,
+                ended: false,
+                feedback: [],
+              });
+            }
+            const attempt = yield* pollOnce(path, remaining, reply).pipe(
+              Effect.map(Option.some),
+              Effect.catch((error) =>
+                isTransportDrop(error)
+                  ? Effect.succeed(Option.none<PollResponse>())
+                  : Effect.fail(error),
+              ),
+            );
+            if (Option.isSome(attempt)) {
+              return attempt.value;
+            }
+            reply = Option.none();
+            const alive = yield* Ref.get(resolvedPort).pipe(
+              Effect.flatMap(healthAt),
+            );
+            if (Option.isNone(alive)) {
+              return yield* Effect.fail(new DaemonNotRunning());
+            }
+            // A short breath between re-issues, so a path that drops
+            // instantly (while /health still answers) cannot spin hot.
+            yield* Effect.sleep("250 millis");
+          }
         });
 
       // End from the terminal (ADR 0011): the agent-facing thin client over

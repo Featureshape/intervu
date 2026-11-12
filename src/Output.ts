@@ -493,20 +493,46 @@ export const doctor = (params: {
   help: params.help,
 });
 
-/** The `status` view when no daemon answered on the port. */
+/** The `status` view when no daemon answered on the port(s). */
 export interface StatusNoDaemonView {
   readonly daemon: "none";
   readonly port: number;
+  readonly stateDir: string;
   readonly help: string;
 }
 
-/** Shape the no-daemon `status` view. */
+/** Shape the no-daemon `status` view; it still names the state dir in use. */
 export const statusNoDaemon = (params: {
   readonly port: number;
+  readonly stateDir: string;
   readonly help: string;
 }): StatusNoDaemonView => ({
   daemon: "none",
   port: params.port,
+  stateDir: params.stateDir,
+  help: params.help,
+});
+
+/**
+ * The `intervu setup vite` view, in canonical key order: what happened to
+ * the written plugin file, where it landed, the exact import line and
+ * config edit for `vite.config.ts` - the one edit that stays human - then
+ * `help`.
+ */
+export interface SetupViteView {
+  readonly action: string;
+  readonly path: string;
+  readonly importLine: string;
+  readonly configEdit: string;
+  readonly help: string;
+}
+
+/** Shape the `setup vite` result, pinning key order. */
+export const setupVite = (params: SetupViteView): SetupViteView => ({
+  action: params.action,
+  path: params.path,
+  importLine: params.importLine,
+  configEdit: params.configEdit,
   help: params.help,
 });
 

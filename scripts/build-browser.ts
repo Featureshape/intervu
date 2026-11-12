@@ -49,3 +49,30 @@ if (!overlay.ok) {
 
 await Bun.write(overlayPath, generatedModule({ bakedOverlayJs: overlay.code }));
 console.error(`built in-page overlay -> ${overlayPath}`);
+
+const vitePluginPath = `${import.meta.dir}/../src/generated/vitePluginAsset.ts`;
+
+// The `intervu/vite` plugin as one dependency-free ESM file, the exact bundle
+// `scripts/build.ts` publishes as `dist/vite.js`, baked so `intervu setup
+// vite` can write it into a project with no package manager and no network.
+// Built after the overlay above, so the bundle inlines the fresh baked copy.
+const vitePluginResult = await Bun.build({
+  entrypoints: [`${import.meta.dir}/../src/vite/plugin.ts`],
+  target: "node",
+  format: "esm",
+});
+const vitePluginArtifact = vitePluginResult.success
+  ? vitePluginResult.outputs[0]
+  : undefined;
+if (vitePluginArtifact === undefined) {
+  for (const message of vitePluginResult.logs) {
+    console.error(message);
+  }
+  console.error("build produced no vite plugin output");
+  process.exit(1);
+}
+await Bun.write(
+  vitePluginPath,
+  generatedModule({ bakedVitePluginJs: await vitePluginArtifact.text() }),
+);
+console.error(`built vite plugin asset -> ${vitePluginPath}`);

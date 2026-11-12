@@ -8,6 +8,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Path,
   Result,
   Schedule,
 } from "effect";
@@ -45,6 +46,7 @@ import { Setup } from "./Setup.ts";
 import { SkillAsset } from "./SkillAsset.ts";
 import { SnapshotFiles } from "./SnapshotFiles.ts";
 import * as Toon from "./Toon.ts";
+import { VitePluginAsset } from "./VitePluginAsset.ts";
 import { WaitingOrigins, waitingElsewhere } from "./WaitingOrigins.ts";
 
 const bin = "intervu";
@@ -621,6 +623,7 @@ const status = Command.make("status", {}, () =>
         Toon.encode(
           Output.statusNoDaemon({
             port: config.port,
+            stateDir: config.stateDir,
             help: `no daemon is listening on port ${config.port} - run 'intervu <file|url>' to start one`,
           }),
         ),
@@ -666,6 +669,47 @@ const stop = Command.make("stop", {}, () =>
         stopped: pid,
         help: "daemon received SIGTERM - it will exit shortly",
       }),
+    });
+    yield* emit(yield* Toon.encode(view));
+  }),
+);
+
+/**
+ * `intervu setup vite`: write the bundled dependency-free ESM plugin to
+ * `<project>/.intervu/vite.mjs` and print the exact import line and config
+ * edit for `vite.config.ts`. The binary carries the bundle (ADR 0007), so
+ * this needs no package manager and no network; it is idempotent, and it
+ * never edits the config itself - that one edit stays human.
+ */
+const setupVite = Command.make("vite", {}, () =>
+  Effect.gen(function* () {
+    const config = yield* AppConfig;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const asset = yield* VitePluginAsset;
+
+    const js = yield* asset.js;
+    const dir = path.join(config.currentDir, ".intervu");
+    const file = path.join(dir, "vite.mjs");
+    const existing = yield* fs.readFileString(file).pipe(Effect.option);
+    const action = Option.match(existing, {
+      onNone: () => "installed",
+      onSome: (content) => (content === js ? "already-present" : "installed"),
+    });
+    if (action === "installed") {
+      yield* fs.makeDirectory(dir, { recursive: true });
+      yield* fs.writeFileString(file, js);
+    }
+
+    const view = Output.setupVite({
+      action,
+      path: file,
+      importLine: 'import { intervu } from "./.intervu/vite.mjs";',
+      configEdit: "plugins: [intervu()] // beside your other plugins",
+      help:
+        action === "installed"
+          ? "add the import line and intervu() to plugins in vite.config.ts yourself - intervu never edits the config - then restart the dev server"
+          : "already written - the import line and the plugins entry in vite.config.ts stay yours to keep",
     });
     yield* emit(yield* Toon.encode(view));
   }),
@@ -727,7 +771,7 @@ const setup = Command.make(
       });
       yield* emit(yield* Toon.encode(view));
     }),
-);
+).pipe(Command.withSubcommands([setupVite]));
 
 const cli = root.pipe(
   Command.withSubcommands([
@@ -783,6 +827,7 @@ const AppLayer = Layer.mergeAll(
   PluginRegistry.layer,
   WaitingOrigins.layer,
   DaemonIdentity.layer,
+  VitePluginAsset.layer,
 ).pipe(
   Layer.provideMerge(SessionHub.layer),
   Layer.provideMerge(SessionPersistence.fileLayer),
