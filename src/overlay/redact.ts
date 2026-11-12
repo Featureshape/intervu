@@ -72,11 +72,19 @@ export const redactSnapshot = (root: Element, fullPage: boolean): void => {
 
 /**
  * Mask an annotation's captured strings - its element text and any selected
- * text - when the page is fully redacted or the annotated element sits under
- * the redact marker. The selector and tag stay as they are, so the
- * annotation still resolves against the (equally masked) snapshot.
+ * text - when the page is fully redacted, when the annotated element sits
+ * under the redact marker, or when the marker sits anywhere inside it: a
+ * text selection spanning the marker's boundary anchors on an ancestor
+ * above it, and an element annotation's text includes its children's, so
+ * containing a marker taints the capture just as being under one does. The
+ * selector and tag stay as they are, so the annotation still resolves
+ * against the (equally masked) snapshot.
  */
 export const redactCapturedText = (
   element: Element | null,
   fullPage: boolean,
-): boolean => fullPage || (element !== null && underRedactMarker(element));
+): boolean =>
+  fullPage ||
+  (element !== null &&
+    (underRedactMarker(element) ||
+      element.querySelector(`[${redactAttribute}]`) !== null));

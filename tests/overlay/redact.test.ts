@@ -104,4 +104,12 @@ describe("redactCapturedText", () => {
     expect(redactCapturedText(outside, false)).toBe(false);
     expect(redactCapturedText(null, false)).toBe(false);
   });
+
+  it("masks an anchor that contains the marker: a spanning capture is tainted", () => {
+    const root = document.createElement("div");
+    root.innerHTML = `<article id="around">before <section data-intervu-redact>secret</section> after</article>`;
+    // A text selection spanning the marker anchors on the ancestor around it,
+    // and an element annotation's text includes its children's.
+    expect(redactCapturedText(root.querySelector("#around"), false)).toBe(true);
+  });
 });
